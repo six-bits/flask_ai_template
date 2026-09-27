@@ -81,7 +81,7 @@ source .venv/bin/activate
 
 ### 2. Run the Development Server
 ```bash
-python api.py
+python -m app.service.api
 ```
 Starts at `http://127.0.0.1:5001`.
 
