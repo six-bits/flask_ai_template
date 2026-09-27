@@ -1,15 +1,32 @@
-"""JSON Schemas for API request validation."""
+"""JSON Schemas for Chat Service API request validation."""
 
-# JSON Schema: validates that the body contains the user's name as a non-empty string
-GREETING_SCHEMA = {
+JOIN_ROOM_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
     "type": "object",
     "properties": {
-        "name": {"type": "string", "minLength": 1},
-        "full_name": {"type": "string", "minLength": 1},
+        "user_id": {"type": "string", "minLength": 1, "maxLength": 50},
     },
-    "anyOf": [
-        {"required": ["name"]},
-        {"required": ["full_name"]},
-    ],
+    "required": ["user_id"],
+    "additionalProperties": False,
+}
+
+SEND_MESSAGE_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+        "user_id": {"type": "string", "minLength": 1, "maxLength": 50},
+        "content": {"type": "string", "minLength": 1, "maxLength": 2000},
+    },
+    "required": ["user_id", "content"],
+    "additionalProperties": False,
+}
+
+LEAVE_ROOM_SCHEMA = {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "type": "object",
+    "properties": {
+        "user_id": {"type": "string", "minLength": 1, "maxLength": 50},
+    },
+    "required": ["user_id"],
     "additionalProperties": False,
 }

@@ -1,9 +1,4 @@
-"""Tests for the greeting API, manager, and adapter layers."""
-
-from app.adapter.entities import GreetingRecordEntity
-from app.adapter.greeting_adapter import GreetingAdapter
-from app.manager.entities import GreetingRequestEntity, GreetingResponseEntity
-from app.manager.greeting_manager import GreetingManager
+"""Unit tests for the Chat Service Stub API layer."""
 
 
 def test_health(client):
@@ -13,93 +8,111 @@ def test_health(client):
     assert res.get_json() == {"status": "ok"}
 
 
-def test_hello_default_salutation(client):
-    """Test greeting with default salutation."""
-    res = client.post("/hello", json={"name": "John Doe"})
+def test_join_room_success(client):
+    """Test joining a room returns expected stub response."""
+    payload = {"user_id": "alice"}
+    res = client.post("/rooms/general/join", json=payload)
     assert res.status_code == 200
+    data = res.get_json()
+    assert data["room_id"] == "general"
+    assert data["user_id"] == "alice"
+    assert data["status"] == "joined"
+
+
+def test_join_room_missing_user_id(client):
+    """Test join room validation fails when user_id is missing."""
+    res = client.post("/rooms/general/join", json={})
+    assert res.status_code == 400
+    data = res.get_json()
+    assert data["error"] == "Validation error"
+    assert "user_id" in data["message"]
+
+
+def test_join_room_extra_fields_rejected(client):
+    """Test join room rejects unexpected properties."""
+    res = client.post("/rooms/general/join", json={"user_id": "alice", "role": "admin"})
+    assert res.status_code == 400
+    data = res.get_json()
+    assert data["error"] == "Validation error"
+
+
+def test_send_message_success(client):
+    """Test sending a message returns 201 and message details."""
+    payload = {"user_id": "alice", "content": "Hello team!"}
+    res = client.post("/rooms/general/messages", json=payload)
+    assert res.status_code == 201
     data = res.get_json()
     assert data["id"] == 1
-    assert data["message"] == "Hello, John Doe!"
-    assert data["salutation"] == "Hello"
-    assert data["name"] == "John Doe"
+    assert data["room_id"] == "general"
+    assert data["user_id"] == "alice"
+    assert data["content"] == "Hello team!"
+    assert "timestamp" in data
 
 
-def test_hello_custom_salutation(client):
-    """Test greeting with custom query parameter salutation."""
-    res = client.post("/hello?salutation=Welcome", json={"name": "Jane Smith"})
+def test_send_message_missing_content(client):
+    """Test send message fails when content is missing."""
+    res = client.post("/rooms/general/messages", json={"user_id": "alice"})
+    assert res.status_code == 400
+    data = res.get_json()
+    assert data["error"] == "Validation error"
+    assert "content" in data["message"]
+
+
+def test_send_message_empty_content(client):
+    """Test send message fails when content is an empty string."""
+    res = client.post("/rooms/general/messages", json={"user_id": "alice", "content": ""})
+    assert res.status_code == 400
+    data = res.get_json()
+    assert data["error"] == "Validation error"
+
+
+def test_get_messages_success(client):
+    """Test retrieving messages with valid user_id query param."""
+    res = client.get("/rooms/general/messages?user_id=alice")
+    assert res.status_code == 200
+    messages = res.get_json()
+    assert isinstance(messages, list)
+    assert len(messages) >= 1
+    assert messages[0]["room_id"] == "general"
+    assert messages[0]["user_id"] == "alice"
+    assert "content" in messages[0]
+
+
+def test_get_messages_missing_user_id_query_param(client):
+    """Test retrieve messages returns 400 if user_id query param is omitted."""
+    res = client.get("/rooms/general/messages")
+    assert res.status_code == 400
+    data = res.get_json()
+    assert data["error"] == "Bad Request"
+    assert "user_id" in data["message"]
+
+
+def test_leave_room_success(client):
+    """Test leaving a room returns 200 and status left."""
+    payload = {"user_id": "alice"}
+    res = client.post("/rooms/general/leave", json=payload)
     assert res.status_code == 200
     data = res.get_json()
-    assert data["message"] == "Welcome, Jane Smith!"
-    assert data["salutation"] == "Welcome"
-    assert data["name"] == "Jane Smith"
+    assert data["room_id"] == "general"
+    assert data["user_id"] == "alice"
+    assert data["status"] == "left"
 
 
-def test_hello_with_full_name_field(client):
-    """Test greeting when body provides 'full_name' instead of 'name'."""
-    res = client.post("/hello?salutation=Good morning", json={"full_name": "Alice Wonderland"})
-    assert res.status_code == 200
-    data = res.get_json()
-    assert data["message"] == "Good morning, Alice Wonderland!"
-    assert data["name"] == "Alice Wonderland"
-
-
-def test_hello_missing_name_in_body(client):
-    """Test validation fails when name is missing in body."""
-    res = client.post("/hello", json={})
+def test_leave_room_missing_user_id(client):
+    """Test leaving a room fails when user_id is missing."""
+    res = client.post("/rooms/general/leave", json={})
     assert res.status_code == 400
     data = res.get_json()
     assert data["error"] == "Validation error"
 
 
-def test_hello_invalid_type_in_body(client):
-    """Test validation fails when name is not a string."""
-    res = client.post("/hello", json={"name": 12345})
-    assert res.status_code == 400
-    data = res.get_json()
-    assert data["error"] == "Validation error"
-
-
-def test_hello_empty_string_name(client):
-    """Test validation fails when name is an empty string."""
-    res = client.post("/hello", json={"name": ""})
-    assert res.status_code == 400
-    data = res.get_json()
-    assert data["error"] == "Validation error"
-
-
-def test_hello_extra_fields_rejected(client):
-    """Test validation rejects unexpected additional properties."""
-    res = client.post("/hello", json={"name": "John Doe", "age": 30})
-    assert res.status_code == 400
-    data = res.get_json()
-    assert data["error"] == "Validation error"
-
-
-def test_hello_malformed_json(client):
-    """Test malformed JSON payload returns 400."""
-    res = client.post("/hello", data="{not json", content_type="application/json")
+def test_malformed_json_payload(client):
+    """Test sending malformed JSON returns 400 Bad Request."""
+    res = client.post(
+        "/rooms/general/join",
+        data="{malformed json",
+        content_type="application/json",
+    )
     assert res.status_code == 400
     data = res.get_json()
     assert "valid JSON" in data["error"]
-
-
-def test_layer_entity_flow():
-    """Unit test verifying Service -> Manager -> Adapter flow using single functions and contracts."""
-    test_adapter = GreetingAdapter()
-    test_manager = GreetingManager(adapter=test_adapter)
-
-    # 1. Service -> Manager contract (GreetingRequestEntity)
-    request_entity = GreetingRequestEntity(name="Charlie", salutation="Greetings")
-    response_entity = test_manager.greet(request_entity)
-
-    assert isinstance(response_entity, GreetingResponseEntity)
-    assert response_entity.id == 1
-    assert response_entity.message == "Greetings, Charlie!"
-
-    # 2. Manager -> Adapter contract (GreetingRecordEntity)
-    assert len(test_adapter.storage) == 1
-    record = test_adapter.storage[0]
-    assert isinstance(record, GreetingRecordEntity)
-    assert record.id == response_entity.id
-    assert record.name == response_entity.name
-    assert record.message == response_entity.message
