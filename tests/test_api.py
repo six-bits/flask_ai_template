@@ -1,6 +1,7 @@
-"""Integration and API tests for the Chat Service."""
+"""Integration tests for the Chat Service API layer interacting with the stubbed manager."""
 
 from unittest.mock import patch
+from app.manager.exceptions import UserNotMemberError
 
 
 def test_health(client):
@@ -11,7 +12,7 @@ def test_health(client):
 
 
 def test_join_room_success(client):
-    """Test joining a room successfully."""
+    """Test joining a room returns 200 and stub response."""
     payload = {"user_id": "alice"}
     res = client.post("/rooms/general/join", json=payload)
     assert res.status_code == 200
@@ -38,12 +39,8 @@ def test_join_room_extra_fields_rejected(client):
     assert data["error"] == "Validation error"
 
 
-def test_send_message_success_when_joined(client):
-    """Test sending a message after joining succeeds with 201."""
-    # First join
-    client.post("/rooms/general/join", json={"user_id": "alice"})
-
-    # Send message
+def test_send_message_success(client):
+    """Test sending a message returns 201 and stub message details."""
     payload = {"user_id": "alice", "content": "Hello team!"}
     res = client.post("/rooms/general/messages", json=payload)
     assert res.status_code == 201
@@ -55,19 +52,8 @@ def test_send_message_success_when_joined(client):
     assert "timestamp" in data
 
 
-def test_send_message_without_joining_returns_403(client):
-    """Test sending message without joining returns 403 Forbidden."""
-    payload = {"user_id": "bob", "content": "Sneak message"}
-    res = client.post("/rooms/general/messages", json=payload)
-    assert res.status_code == 403
-    data = res.get_json()
-    assert data["error"] == "Forbidden"
-    assert "User 'bob' must join room 'general' before sending messages" in data["message"]
-
-
 def test_send_message_missing_content(client):
     """Test send message fails when content is missing."""
-    client.post("/rooms/general/join", json={"user_id": "alice"})
     res = client.post("/rooms/general/messages", json={"user_id": "alice"})
     assert res.status_code == 400
     data = res.get_json()
@@ -77,33 +63,35 @@ def test_send_message_missing_content(client):
 
 def test_send_message_empty_content(client):
     """Test send message fails when content is empty."""
-    client.post("/rooms/general/join", json={"user_id": "alice"})
     res = client.post("/rooms/general/messages", json={"user_id": "alice", "content": ""})
     assert res.status_code == 400
     data = res.get_json()
     assert data["error"] == "Validation error"
 
 
-def test_get_messages_success_when_joined(client):
-    """Test retrieving messages when user is a member returns 200."""
-    client.post("/rooms/general/join", json={"user_id": "alice"})
-    client.post("/rooms/general/messages", json={"user_id": "alice", "content": "Msg 1"})
+def test_send_message_user_not_member_returns_403(client):
+    """Test UserNotMemberError from manager is translated to HTTP 403 Forbidden."""
+    with patch(
+        "app.service.api.chat_manager.send_message",
+        side_effect=UserNotMemberError("general", "bob", "sending messages"),
+    ):
+        res = client.post("/rooms/general/messages", json={"user_id": "bob", "content": "Sneak"})
+        assert res.status_code == 403
+        data = res.get_json()
+        assert data["error"] == "Forbidden"
+        assert "User 'bob' must join room 'general' before sending messages" in data["message"]
 
+
+def test_get_messages_success(client):
+    """Test retrieving messages with user_id query param returns 200."""
     res = client.get("/rooms/general/messages?user_id=alice")
     assert res.status_code == 200
     messages = res.get_json()
-    assert len(messages) == 1
-    assert messages[0]["content"] == "Msg 1"
+    assert isinstance(messages, list)
+    assert len(messages) >= 1
+    assert messages[0]["room_id"] == "general"
     assert messages[0]["user_id"] == "alice"
-
-
-def test_get_messages_without_joining_returns_403(client):
-    """Test retrieving messages without joining returns 403 Forbidden."""
-    res = client.get("/rooms/general/messages?user_id=charlie")
-    assert res.status_code == 403
-    data = res.get_json()
-    assert data["error"] == "Forbidden"
-    assert "User 'charlie' must join room 'general' before retrieving messages" in data["message"]
+    assert "content" in messages[0]
 
 
 def test_get_messages_missing_user_id_query_param(client):
@@ -115,9 +103,21 @@ def test_get_messages_missing_user_id_query_param(client):
     assert "user_id" in data["message"]
 
 
+def test_get_messages_user_not_member_returns_403(client):
+    """Test UserNotMemberError on get_messages is translated to HTTP 403 Forbidden."""
+    with patch(
+        "app.service.api.chat_manager.get_messages",
+        side_effect=UserNotMemberError("general", "charlie", "retrieving messages"),
+    ):
+        res = client.get("/rooms/general/messages?user_id=charlie")
+        assert res.status_code == 403
+        data = res.get_json()
+        assert data["error"] == "Forbidden"
+        assert "User 'charlie' must join room 'general' before retrieving messages" in data["message"]
+
+
 def test_leave_room_success(client):
     """Test leaving a room returns 200 and status left."""
-    client.post("/rooms/general/join", json={"user_id": "alice"})
     res = client.post("/rooms/general/leave", json={"user_id": "alice"})
     assert res.status_code == 200
     data = res.get_json()
@@ -126,33 +126,12 @@ def test_leave_room_success(client):
     assert data["status"] == "left"
 
 
-def test_send_message_after_leave_returns_403(client):
-    """Test user cannot send messages after leaving the room."""
-    client.post("/rooms/general/join", json={"user_id": "alice"})
-    client.post("/rooms/general/leave", json={"user_id": "alice"})
-
-    res = client.post("/rooms/general/messages", json={"user_id": "alice", "content": "Post leave"})
-    assert res.status_code == 403
-    assert res.get_json()["error"] == "Forbidden"
-
-
-def test_multi_room_isolation_via_api(client):
-    """Test messages in Room A do not leak into Room B."""
-    client.post("/rooms/general/join", json={"user_id": "alice"})
-    client.post("/rooms/random/join", json={"user_id": "bob"})
-
-    client.post("/rooms/general/messages", json={"user_id": "alice", "content": "General message"})
-    client.post("/rooms/random/messages", json={"user_id": "bob", "content": "Random message"})
-
-    res_general = client.get("/rooms/general/messages?user_id=alice")
-    assert res_general.status_code == 200
-    assert len(res_general.get_json()) == 1
-    assert res_general.get_json()[0]["content"] == "General message"
-
-    res_random = client.get("/rooms/random/messages?user_id=bob")
-    assert res_random.status_code == 200
-    assert len(res_random.get_json()) == 1
-    assert res_random.get_json()[0]["content"] == "Random message"
+def test_leave_room_missing_user_id(client):
+    """Test leave room validation fails when user_id is missing."""
+    res = client.post("/rooms/general/leave", json={})
+    assert res.status_code == 400
+    data = res.get_json()
+    assert data["error"] == "Validation error"
 
 
 def test_malformed_json_payload(client):

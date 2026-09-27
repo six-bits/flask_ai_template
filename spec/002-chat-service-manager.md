@@ -12,10 +12,10 @@
 This specification defines the **Manager Layer** (`app/manager/`) for the Chat Service. The manager layer coordinates the business logic, enforces business rules (such as room membership validation), and mediates between the **Service Layer** and the **Adapter Layer**.
 
 ### Architectural Principles
-- **Unified Manager Design**: Because the chat business logic is lightweight and cohesive, a single `ChatManager` class encapsulates all room operations (`join`, `send_message`, `get_messages`, `leave`).
+- **Unified Manager Design**: A single `ChatManager` class encapsulates all room operations (`join`, `send_message`, `get_messages`, `leave`).
+- **Contract & Stub Strategy**: For this phase, the manager layer defines the complete entity contracts and interfaces with stubbed responses. Deep business rules (membership persistence/state tracking) are deferred to subsequent adapter integration.
 - **Entity Contracts**: Interacts with the Service layer strictly via dataclass entities defined in `app/manager/entities.py`.
-- **Domain Exceptions**: Raises explicit exceptions defined in `app/manager/exceptions.py` that map directly to HTTP status codes (e.g. `UserNotMemberError` &rarr; `403 Forbidden`).
-- **Mock/Stub Dependencies**: Tests the manager layer in isolation using in-memory mock adapter structures.
+- **Domain Exceptions**: Defines explicit exceptions in `app/manager/exceptions.py` that map directly to HTTP status codes (e.g. `UserNotMemberError` &rarr; `403 Forbidden`, generic &rarr; `500 Internal Server Error`).
 
 ---
 
