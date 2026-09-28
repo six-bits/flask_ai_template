@@ -18,9 +18,11 @@ Take into account this API will be consumed by a basic chat app (think: Slack, D
 - **Storage**: In-memory data storage (no external database required).
 - **Authentication**: No authentication required (identity supplied via request payload or query parameter, e.g., `user_id`).
 - **Room Lifecycle Invariant**: Rooms are NOT auto-created. A room must be explicitly created first via the room creation API. If a room does not exist, any operation on that room (`join`, `send_message`, `get_messages`, `leave`) MUST raise an error (`RoomNotFoundError` &rarr; `404 Not Found`).
+- **User Validation Invariant**: Operations referencing a `user_id` require the user to exist in the user store. If a user is not found, the operation MUST raise an error (`UserNotFoundError` &rarr; `404 Not Found`).
 - **Tooling**: Standard HTTP clients (cURL, Postman, HTTPie) can inspect responses.
 - **Validation**: JSON Schema using `jsonschema`.
 - **Architecture**: Follows template layered architecture (Service &rarr; Manager &rarr; Adapter) with decoupled boundary entities.
 - **Persistence & Adapters**: In-memory persistence tracking room memberships and messages, isolated by room, with dedicated adapter contract entities.
+
 
 

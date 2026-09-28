@@ -4,6 +4,44 @@ from dataclasses import asdict, dataclass
 from typing import Any, Dict
 
 
+# --- Room Creation ---
+
+@dataclass
+class CreateRoomRequestEntity:
+    """Request entity to explicitly create a chat room."""
+    room_id: str
+
+
+@dataclass
+class CreateRoomResponseEntity:
+    """Response entity after creating a chat room."""
+    room_id: str
+    created_at: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+# --- User Registration ---
+
+@dataclass
+class RegisterUserRequestEntity:
+    """Request entity to register an available user."""
+    user_id: str
+
+
+@dataclass
+class RegisterUserResponseEntity:
+    """Response entity after registering an available user."""
+    user_id: str
+    created_at: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+# --- Room Membership & Messaging ---
+
 @dataclass
 class JoinRoomRequestEntity:
     """Request entity to join a room."""

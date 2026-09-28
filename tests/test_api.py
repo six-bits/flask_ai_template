@@ -84,6 +84,7 @@ def test_send_message_user_not_member_returns_403(client):
 
 def test_get_messages_success(client):
     """Test retrieving messages with user_id query param returns 200."""
+    client.post("/rooms/general/messages", json={"user_id": "alice", "content": "Hello team!"})
     res = client.get("/rooms/general/messages?user_id=alice")
     assert res.status_code == 200
     messages = res.get_json()
@@ -92,6 +93,7 @@ def test_get_messages_success(client):
     assert messages[0]["room_id"] == "general"
     assert messages[0]["user_id"] == "alice"
     assert "content" in messages[0]
+
 
 
 def test_get_messages_missing_user_id_query_param(client):
