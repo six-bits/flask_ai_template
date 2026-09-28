@@ -13,6 +13,7 @@ from app.manager.entities import (
 from app.manager.exceptions import (
     ChatManagerError,
     RoomNotFoundError,
+    UserNotFoundError,
     UserNotMemberError,
 )
 from app.service.schema import (
@@ -34,6 +35,12 @@ def handle_validation_error(err):
     return jsonify({"error": "Validation error", "message": err.message}), 400
 
 
+@app.errorhandler(UserNotFoundError)
+def handle_user_not_found(err: UserNotFoundError):
+    """Handle user not found error."""
+    return jsonify({"error": "Not Found", "message": str(err)}), 404
+
+
 @app.errorhandler(UserNotMemberError)
 def handle_user_not_member(err: UserNotMemberError):
     """Handle permission error when user has not joined the room."""
@@ -44,6 +51,7 @@ def handle_user_not_member(err: UserNotMemberError):
 def handle_room_not_found(err: RoomNotFoundError):
     """Handle room not found error."""
     return jsonify({"error": "Not Found", "message": str(err)}), 404
+
 
 
 @app.errorhandler(ChatManagerError)

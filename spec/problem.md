@@ -3,26 +3,30 @@
 ## Raw User Request
 
 Implement a set of APIs that can accomplish the following:
-1. A user can create a chat room.
-2. A user can join an existing chat room.
-3. After joining, a user can send a message to that chat room.
-4. A user can retrieve messages from a chat room that they have joined.
-5. (Optional) A user can leave a chat room.
-6. The server should support multiple chat rooms.
+1. A user can join a chat room (`POST /rooms/<room_id>/join`).
+2. After joining, a user can send a message to that chat room (`POST /rooms/<room_id>/messages`).
+3. A user can retrieve messages from a chat room that they have joined (`GET /rooms/<room_id>/messages?user_id=<user_id>`).
+4. (Optional) A user can leave a chat room (`POST /rooms/<room_id>/leave`).
+5. The server should support multiple chat rooms.
 
 Take into account this API will be consumed by a basic chat app (think: Slack, Discord, Basecamp, etc.).
 
 ## Notes & Constraints
 - **Framework**: Lightweight Flask API using Python.
-- **Payloads**: JSON format with validation.
+- **Strict API Scope**: Only the required chat APIs are exposed over HTTP. No extra HTTP APIs (such as user or room management endpoints) are added to the service layer.
+- **Test Environment Provisioning**: The test environment is seeded in advance using Manager layer functions (`register_user`, `create_room`) to provision initial test users and rooms.
+- **Payloads & Validation**: JSON format with validation via `jsonschema`.
 - **Storage**: In-memory data storage (no external database required).
 - **Authentication**: No authentication required (identity supplied via request payload or query parameter, e.g., `user_id`).
-- **Room Lifecycle Invariant**: Rooms are NOT auto-created. A room must be explicitly created first via the room creation API. If a room does not exist, any operation on that room (`join`, `send_message`, `get_messages`, `leave`) MUST raise an error (`RoomNotFoundError` &rarr; `404 Not Found`).
-- **User Validation Invariant**: Operations referencing a `user_id` require the user to exist in the user store. If a user is not found, the operation MUST raise an error (`UserNotFoundError` &rarr; `404 Not Found`).
-- **Tooling**: Standard HTTP clients (cURL, Postman, HTTPie) can inspect responses.
-- **Validation**: JSON Schema using `jsonschema`.
+- **Error Mapping Invariants**:
+  - `RoomNotFoundError` &rarr; `404 Not Found`
+  - `UserNotFoundError` &rarr; `404 Not Found`
+  - `UserNotMemberError` &rarr; `403 Forbidden`
+  - `ValidationError` / `ChatManagerError` &rarr; `400 Bad Request`
+  - Unhandled `Exception` &rarr; `500 Internal Server Error`
 - **Architecture**: Follows template layered architecture (Service &rarr; Manager &rarr; Adapter) with decoupled boundary entities.
-- **Persistence & Adapters**: In-memory persistence tracking room memberships and messages, isolated by room, with dedicated adapter contract entities.
+- **E2E Testing**: Full end-to-end integration tests orchestrating the complete Service &rarr; Manager &rarr; Adapter stack via HTTP client.
+
 
 
 
