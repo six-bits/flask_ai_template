@@ -25,7 +25,12 @@ Take into account this API will be consumed by a basic chat app (think: Slack, D
   - `ValidationError` / `ChatManagerError` &rarr; `400 Bad Request`
   - Unhandled `Exception` &rarr; `500 Internal Server Error`
 - **Architecture**: Follows template layered architecture (Service &rarr; Manager &rarr; Adapter) with decoupled boundary entities.
+  - **Manager Layer Decomposition**:
+    1. `UserManager` (`app/manager/user_manager.py`): Handles user registration and existence validations.
+    2. `ChatManager` (`app/manager/chat_manager.py`): Handles chat room lifecycle and membership operations (`create_room`, `join`, `leave`, membership verification).
+    3. `MessagesManager` (`app/manager/messages_manager.py`): Handles message posting (`send_message`) and retrieval (`get_messages`).
 - **E2E Testing**: Full end-to-end integration tests orchestrating the complete Service &rarr; Manager &rarr; Adapter stack via HTTP client.
+
 
 
 

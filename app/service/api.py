@@ -3,7 +3,7 @@
 from flask import Flask, jsonify, request
 from jsonschema import ValidationError, validate
 
-from app.manager.chat_manager import chat_manager
+from app.manager import chat_manager, messages_manager
 from app.manager.entities import (
     GetMessagesRequestEntity,
     JoinRoomRequestEntity,
@@ -113,7 +113,7 @@ def send_message(room_id: str):
         user_id=data["user_id"],
         content=data["content"],
     )
-    response_entity = chat_manager.send_message(request_entity)
+    response_entity = messages_manager.send_message(request_entity)
 
     return jsonify(response_entity.to_dict()), 201
 
@@ -132,7 +132,7 @@ def get_messages(room_id: str):
         room_id=room_id,
         user_id=user_id.strip(),
     )
-    messages = chat_manager.get_messages(request_entity)
+    messages = messages_manager.get_messages(request_entity)
 
     return jsonify([m.to_dict() for m in messages]), 200
 
