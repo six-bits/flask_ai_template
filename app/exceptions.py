@@ -46,6 +46,11 @@ class IdempotencyConflictError(WalletError):
     pass
 
 
+class IdempotencyPayloadMismatchError(WalletError):
+    """Raised when an existing idempotency key is reused with a different request payload."""
+    pass
+
+
 class TransferExecutionError(WalletError):
     """Raised when a balance movement fails mid-flight and triggers compensation."""
     def __init__(self, message: str, legs_executed: int = 0, reversed: bool = True) -> None:

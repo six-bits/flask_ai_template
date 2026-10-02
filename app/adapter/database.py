@@ -1,38 +1,30 @@
-"""Centralized thread-safe in-memory database engine holding raw tables and locks."""
+"""Centralized in-memory database engine holding raw collections without global locks."""
 
-import threading
-from typing import Any, Dict, Optional
+from typing import Dict
 
 from app.adapter.entities import (
     AccountRecordEntity,
-    IdempotencyRecordEntity,
     QuoteRecordEntity,
     TransactionRecordEntity,
 )
 
 
 class InMemoryDatabase:
-    """Thread-safe in-memory database holding all data collections and account locks."""
+    """
+    In-memory database holding all data collections.
+    Does NOT use global locks; resource-level locks live directly inside AccountRecordEntity.
+    """
 
     def __init__(self, seed: bool = True) -> None:
         self.accounts: Dict[str, AccountRecordEntity] = {}
         self.quotes: Dict[str, QuoteRecordEntity] = {}
         self.transactions: Dict[str, TransactionRecordEntity] = {}
-        self.idempotency: Dict[str, IdempotencyRecordEntity] = {}
+        self.transactions_by_idempotency: Dict[str, TransactionRecordEntity] = {}
         self.rates: Dict[str, float] = {}
         self.fee_percentage: float = 0.01  # 1% standard fee
-        self.account_locks: Dict[str, threading.RLock] = {}
-        self.global_lock = threading.RLock()
 
         if seed:
             self.seed_base_state()
-
-    def get_lock(self, account_id: str) -> threading.RLock:
-        """Get or lazily create an RLock for an account in a thread-safe manner."""
-        with self.global_lock:
-            if account_id not in self.account_locks:
-                self.account_locks[account_id] = threading.RLock()
-            return self.account_locks[account_id]
 
     def seed_base_state(self) -> None:
         """Seed the in-memory database with initial users, balances, pools, and rates."""
@@ -81,14 +73,12 @@ class InMemoryDatabase:
 
     def reset(self) -> None:
         """Reset and re-seed the database for test isolation."""
-        with self.global_lock:
-            self.accounts.clear()
-            self.quotes.clear()
-            self.transactions.clear()
-            self.idempotency.clear()
-            self.rates.clear()
-            self.account_locks.clear()
-            self.seed_base_state()
+        self.accounts.clear()
+        self.quotes.clear()
+        self.transactions.clear()
+        self.transactions_by_idempotency.clear()
+        self.rates.clear()
+        self.seed_base_state()
 
 
 # Shared singleton database instance

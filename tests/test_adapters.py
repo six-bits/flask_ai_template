@@ -6,8 +6,13 @@ import pytest
 from app.adapter.database import InMemoryDatabase
 from app.adapter.entities import LedgerLegRecordEntity, QuoteRecordEntity
 from app.adapter.quote_adapter import QuoteAdapter
-from app.adapter.wallet_adapter import WalletAdapter
-from app.exceptions import AccountNotFoundError, InsufficientFundsError
+from app.adapter.wallet_adapter import WalletAdapter, compute_payload_hash
+from app.exceptions import (
+    AccountNotFoundError,
+    IdempotencyConflictError,
+    IdempotencyPayloadMismatchError,
+    InsufficientFundsError,
+)
 
 
 @pytest.fixture
@@ -131,25 +136,100 @@ def test_quote_adapter_lifecycle(custom_adapters):
     assert quote.get_quote("qt_test_001").status == "ACCEPTED"
 
 
-def test_wallet_adapter_idempotency_lifecycle(custom_adapters):
-    """Verify check_or_reserve_idempotency and save_idempotency_response in WalletAdapter."""
+def test_compute_payload_hash_deterministic():
+    """Verify compute_payload_hash is deterministic regardless of dictionary key order."""
+    payload1 = {"b": 2, "a": 1, "c": {"y": "test", "x": 10}}
+    payload2 = {"a": 1, "c": {"x": 10, "y": "test"}, "b": 2}
+    assert compute_payload_hash(payload1) == compute_payload_hash(payload2)
+
+
+def test_wallet_adapter_transaction_bound_idempotency_lifecycle(custom_adapters):
+    """Verify transaction-bound idempotency lifecycle in WalletAdapter."""
     wallet = custom_adapters["wallet"]
     key = "idem-test-123"
+    hash_val = compute_payload_hash({"amount": 1000, "currency": "USD"})
 
-    res1 = wallet.check_or_reserve_idempotency(key)
-    assert res1 is None
+    # 1. Create PENDING transaction with idempotency key
+    tx = wallet.get_or_create_transaction(
+        tx_id="tx_test_100",
+        user_id="usr_alice",
+        tx_type="P2P_TRANSFER",
+        metadata={"amount": 1000},
+        idempotency_key=key,
+        request_hash=hash_val,
+    )
+    assert tx.transaction_id == "tx_test_100"
+    assert tx.status == "PENDING"
+    assert tx.idempotency_key == key
+    assert tx.request_hash == hash_val
 
-    res2 = wallet.check_or_reserve_idempotency(key)
-    assert res2 is not None
-    assert res2.status == "PROCESSING"
+    # 2. In-flight collision raises IdempotencyConflictError
+    with pytest.raises(IdempotencyConflictError):
+        wallet.get_or_create_transaction(
+            tx_id="tx_test_101",
+            user_id="usr_alice",
+            tx_type="P2P_TRANSFER",
+            metadata={"amount": 1000},
+            idempotency_key=key,
+            request_hash=hash_val,
+        )
 
-    wallet.save_idempotency_response(key, 200, {"success": True})
+    # 3. Complete transaction and store response
+    response_data = {"status": "COMPLETED", "tx_id": "tx_test_100"}
+    wallet.complete_transaction("tx_test_100", response_data)
 
-    res3 = wallet.check_or_reserve_idempotency(key)
-    assert res3 is not None
-    assert res3.status == "COMPLETED"
-    assert res3.response_code == 200
-    assert res3.response_data == {"success": True}
+    # 4. Completed request returns existing transaction with cached response
+    tx_existing = wallet.get_or_create_transaction(
+        tx_id="tx_test_102",
+        user_id="usr_alice",
+        tx_type="P2P_TRANSFER",
+        metadata={"amount": 1000},
+        idempotency_key=key,
+        request_hash=hash_val,
+    )
+    assert tx_existing.transaction_id == "tx_test_100"
+    assert tx_existing.status == "COMPLETED"
+    assert tx_existing.response_payload == response_data
+
+
+def test_wallet_adapter_payload_mismatch_raises_bad_request(custom_adapters):
+    """Verify reusing an idempotency key with a different payload raises IdempotencyPayloadMismatchError."""
+    wallet = custom_adapters["wallet"]
+    key = "idem-key-mismatch"
+    hash_original = compute_payload_hash({"amount": 1000, "currency": "USD"})
+    hash_different = compute_payload_hash({"amount": 5000, "currency": "USD"})
+
+    wallet.get_or_create_transaction(
+        tx_id="tx_test_200",
+        user_id="usr_alice",
+        tx_type="P2P_TRANSFER",
+        metadata={"amount": 1000},
+        idempotency_key=key,
+        request_hash=hash_original,
+    )
+
+    with pytest.raises(IdempotencyPayloadMismatchError) as exc_info:
+        wallet.get_or_create_transaction(
+            tx_id="tx_test_201",
+            user_id="usr_alice",
+            tx_type="P2P_TRANSFER",
+            metadata={"amount": 5000},
+            idempotency_key=key,
+            request_hash=hash_different,
+        )
+    assert "Idempotency-Key reused with different request payload" in str(exc_info.value)
+
+
+def test_resource_locking_per_account(custom_adapters):
+    """Verify that each AccountRecordEntity has its own lock and no global lock is used."""
+    wallet = custom_adapters["wallet"]
+    alice_acc = wallet.get_account("usr_alice:USD")
+    bob_acc = wallet.get_account("usr_bob:USD")
+
+    assert hasattr(alice_acc, "lock")
+    assert hasattr(bob_acc, "lock")
+    assert alice_acc.lock is not bob_acc.lock
+    assert not hasattr(wallet.db, "global_lock")
 
 
 def test_concurrent_transfers_thread_safety(custom_adapters):

@@ -6,6 +6,7 @@ from jsonschema import ValidationError, validate
 from app.exceptions import (
     AccountNotFoundError,
     IdempotencyConflictError,
+    IdempotencyPayloadMismatchError,
     InsufficientFundsError,
     InvalidQuoteError,
     QuoteExpiredError,
@@ -53,6 +54,12 @@ def handle_validation_error(err):
 def handle_not_found_error(err):
     """Format 404 Not Found error response."""
     return jsonify({"error": "Not Found", "message": str(err)}), 404
+
+
+@app.errorhandler(IdempotencyPayloadMismatchError)
+def handle_idempotency_payload_mismatch(err):
+    """Format 400 Bad Request error response when an Idempotency-Key is reused with different payload."""
+    return jsonify({"error": "Bad Request", "message": str(err)}), 400
 
 
 @app.errorhandler(IdempotencyConflictError)

@@ -10,9 +10,14 @@ from app.adapter.entities import (
     TransactionRecordEntity,
 )
 from app.adapter.quote_adapter import QuoteAdapter, quote_adapter
-from app.adapter.wallet_adapter import WalletAdapter, wallet_adapter
+from app.adapter.wallet_adapter import (
+    WalletAdapter,
+    compute_payload_hash,
+    wallet_adapter,
+)
 from app.exceptions import (
     IdempotencyConflictError,
+    IdempotencyPayloadMismatchError,
     InvalidQuoteError,
     QuoteExpiredError,
     QuoteNotFoundError,
@@ -113,26 +118,43 @@ class QuoteManager:
     def accept_quote(self, request: AcceptQuoteRequestEntity) -> AcceptQuoteResponseEntity:
         """
         Accepts and executes an FX conversion:
-        1. Check idempotency via wallet_adapter.
+        1. Check idempotency and payload hash matching via wallet_adapter.
         2. Validate quote exists in quote_adapter, belongs to user, is PENDING, and within 30s TTL.
-        3. Execute multi-hop pool sequence via wallet_adapter:
+        3. Register PENDING transaction.
+        4. Execute multi-hop pool sequence via wallet_adapter using fine-grained resource locks:
            - Leg 1: User(from_curr) -> Pool: FX Outbound(from_curr) [from_amount]
            - Leg 2: Pool: FX Outbound(from_curr) -> Pool: FX Inbound(to_curr) [gross_to_amount]
            - Leg 3: Pool: FX Inbound(to_curr) -> Pool: Fee(to_curr) [fee_amount]
            - Leg 4: Pool: FX Inbound(to_curr) -> User(to_curr) [net_to_amount]
-        4. If any leg fails, perform LIFO compensation on all completed legs.
-        5. Mark quote as ACCEPTED via quote_adapter and record transaction as COMPLETED.
+        5. If any leg fails, perform LIFO compensation on all completed legs and mark tx REVERSED.
+        6. Mark quote as ACCEPTED and record transaction as COMPLETED caching response payload.
         """
-        # 1. Idempotency check
+        # 1. Idempotency & payload hash verification
+        incoming_hash = None
         if request.idempotency_key:
-            existing = self.wallet_adapter.check_or_reserve_idempotency(request.idempotency_key)
+            payload_to_hash = {
+                "quote_id": request.quote_id,
+                "user_id": request.user_id,
+            }
+            incoming_hash = compute_payload_hash(payload_to_hash)
+            existing = self.wallet_adapter.get_transaction_by_idempotency_key(
+                request.idempotency_key
+            )
             if existing:
-                if existing.status == "PROCESSING":
+                if (
+                    existing.request_hash
+                    and incoming_hash
+                    and existing.request_hash != incoming_hash
+                ):
+                    raise IdempotencyPayloadMismatchError(
+                        "Idempotency-Key reused with different request payload"
+                    )
+                if existing.status == "PENDING":
                     raise IdempotencyConflictError(
                         "A request with this Idempotency-Key is currently processing"
                     )
-                if existing.status == "COMPLETED":
-                    return AcceptQuoteResponseEntity(**existing.response_data)
+                if existing.status == "COMPLETED" and existing.response_payload:
+                    return AcceptQuoteResponseEntity(**existing.response_payload)
 
         # 2. Quote validations
         quote = self.quote_adapter.get_quote(request.quote_id)
@@ -154,20 +176,12 @@ class QuoteManager:
                 f"Quote '{quote.quote_id}' has expired (validity was 30 seconds)"
             )
 
-        # 3. Multi-hop pool balance movements (handled by wallet_adapter)
+        # 3. Register PENDING transaction
         tx_id = f"tx_fx_{uuid.uuid4().hex[:10]}"
-        user_src_acc = f"{quote.user_id}:{quote.from_currency}"
-        user_tgt_acc = f"{quote.user_id}:{quote.to_currency}"
-        pool_outbound = f"pool:outbound:{quote.from_currency}"
-        pool_inbound = f"pool:inbound:{quote.to_currency}"
-        pool_fee = f"pool:fee:{quote.to_currency}"
-
-        tx_record = TransactionRecordEntity(
-            transaction_id=tx_id,
+        tx_record = self.wallet_adapter.get_or_create_transaction(
+            tx_id=tx_id,
             user_id=quote.user_id,
-            transaction_type="FX_CONVERSION",
-            status="PENDING",
-            legs=[],
+            tx_type="FX_CONVERSION",
             metadata={
                 "quote_id": quote.quote_id,
                 "from_currency": quote.from_currency,
@@ -177,8 +191,15 @@ class QuoteManager:
                 "fee_amount": quote.fee_amount,
                 "fee_currency": quote.to_currency,
             },
+            idempotency_key=request.idempotency_key,
+            request_hash=incoming_hash,
         )
-        self.wallet_adapter.record_transaction(tx_record)
+
+        user_src_acc = f"{quote.user_id}:{quote.from_currency}"
+        user_tgt_acc = f"{quote.user_id}:{quote.to_currency}"
+        pool_outbound = f"pool:outbound:{quote.from_currency}"
+        pool_inbound = f"pool:inbound:{quote.to_currency}"
+        pool_fee = f"pool:fee:{quote.to_currency}"
 
         planned_legs = [
             LedgerLegRecordEntity(
@@ -241,7 +262,7 @@ class QuoteManager:
                 )
                 self.wallet_adapter.execute_transfer_leg(rev_leg)
 
-            tx_record.status = "REVERSED"
+            self.wallet_adapter.fail_or_reverse_transaction(tx_id, status="REVERSED")
             self.quote_adapter.update_quote_status(quote.quote_id, "FAILED")
             raise TransferExecutionError(
                 f"FX conversion failed: {str(exc)}; reversing operations completed successfully",
@@ -250,7 +271,6 @@ class QuoteManager:
             ) from exc
 
         # 5. Finalize transaction and quote
-        tx_record.status = "COMPLETED"
         self.quote_adapter.update_quote_status(quote.quote_id, "ACCEPTED")
 
         response = AcceptQuoteResponseEntity(
@@ -266,10 +286,10 @@ class QuoteManager:
             status="COMPLETED",
         )
 
-        if request.idempotency_key:
-            self.wallet_adapter.save_idempotency_response(
-                request.idempotency_key, status_code=200, response_data=response.to_dict()
-            )
+        self.wallet_adapter.complete_transaction(
+            tx_id=tx_id,
+            response_payload=response.to_dict(),
+        )
 
         return response
 

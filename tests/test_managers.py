@@ -9,6 +9,7 @@ from app.adapter.quote_adapter import QuoteAdapter
 from app.adapter.wallet_adapter import WalletAdapter
 from app.exceptions import (
     IdempotencyConflictError,
+    IdempotencyPayloadMismatchError,
     InvalidQuoteError,
     QuoteExpiredError,
     QuoteNotFoundError,
@@ -345,4 +346,100 @@ def test_concurrent_manager_transfers(managers):
     assert repo.get_account("usr_bob:USD").balance == initial_bob
     assert repo.get_account("pool:outbound:USD").balance == 0
     assert repo.get_account("pool:inbound:USD").balance == 0
+
+
+def test_transfer_idempotency_payload_mismatch_rejected(managers):
+    """Verify TransferManager rejects reused Idempotency-Key if payload differs."""
+    transfer_mgr = managers["transfer_mgr"]
+    repo = managers["repo"]
+
+    key = "idem_key_mismatch_manager"
+    req1 = P2PTransferRequestEntity(
+        sender_user_id="usr_alice",
+        recipient_user_id="usr_bob",
+        currency="USD",
+        amount=1000,
+        idempotency_key=key,
+    )
+    res1 = transfer_mgr.transfer(req1)
+    assert res1.status == "COMPLETED"
+
+    # Re-send with same key but different amount
+    req2 = P2PTransferRequestEntity(
+        sender_user_id="usr_alice",
+        recipient_user_id="usr_bob",
+        currency="USD",
+        amount=2500,
+        idempotency_key=key,
+    )
+    with pytest.raises(IdempotencyPayloadMismatchError) as exc_info:
+        transfer_mgr.transfer(req2)
+    assert "Idempotency-Key reused with different request payload" in str(exc_info.value)
+
+    # Re-send with same key but different recipient
+    req3 = P2PTransferRequestEntity(
+        sender_user_id="usr_alice",
+        recipient_user_id="usr_charlie",
+        currency="USD",
+        amount=1000,
+        idempotency_key=key,
+    )
+    with pytest.raises(IdempotencyPayloadMismatchError) as exc_info:
+        transfer_mgr.transfer(req3)
+    assert "Idempotency-Key reused with different request payload" in str(exc_info.value)
+
+
+def test_accept_quote_idempotency_replay_and_mismatch(managers):
+    """Verify QuoteManager handles idempotency replay and rejects payload mismatch."""
+    quote_mgr = managers["quote_mgr"]
+
+    q1 = quote_mgr.create_quote(
+        CreateQuoteRequestEntity(
+            user_id="usr_alice",
+            from_currency="USD",
+            to_currency="EUR",
+            from_amount=5000,
+        )
+    )
+    q2 = quote_mgr.create_quote(
+        CreateQuoteRequestEntity(
+            user_id="usr_alice",
+            from_currency="USD",
+            to_currency="EUR",
+            from_amount=5000,
+        )
+    )
+
+    key = "idem_quote_accept_key"
+    res1 = quote_mgr.accept_quote(
+        AcceptQuoteRequestEntity(
+            quote_id=q1.quote_id,
+            user_id="usr_alice",
+            idempotency_key=key,
+        )
+    )
+    assert res1.status == "COMPLETED"
+
+    # Replay with same quote_id and user_id -> returns cached response
+    res2 = quote_mgr.accept_quote(
+        AcceptQuoteRequestEntity(
+            quote_id=q1.quote_id,
+            user_id="usr_alice",
+            idempotency_key=key,
+        )
+    )
+    assert res2.transaction_id == res1.transaction_id
+    assert res2.debited_amount == res1.debited_amount
+
+    # Reuse same key with different quote_id -> raises IdempotencyPayloadMismatchError
+    with pytest.raises(IdempotencyPayloadMismatchError) as exc_info:
+        quote_mgr.accept_quote(
+            AcceptQuoteRequestEntity(
+                quote_id=q2.quote_id,
+                user_id="usr_alice",
+                idempotency_key=key,
+            )
+        )
+    assert "Idempotency-Key reused with different request payload" in str(exc_info.value)
+
 

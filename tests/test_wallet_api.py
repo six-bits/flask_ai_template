@@ -252,3 +252,68 @@ def test_get_user_transactions_api(client):
     assert tx["legs"][1]["to_account"] == "pool:inbound:USD"
     assert tx["legs"][2]["from_account"] == "pool:inbound:USD"
     assert tx["legs"][2]["to_account"] == "usr_bob:USD"
+
+
+def test_p2p_transfer_api_idempotency_payload_mismatch_bad_request(client):
+    """Reusing Idempotency-Key with different payload in /transfers returns 400 Bad Request."""
+    key_headers = {"Idempotency-Key": "idem-api-transfer-mismatch"}
+    payload1 = {
+        "sender_user_id": "usr_alice",
+        "recipient_user_id": "usr_bob",
+        "currency": "USD",
+        "amount": 2000,
+    }
+    res1 = client.post("/transfers", json=payload1, headers=key_headers)
+    assert res1.status_code == 200
+
+    # Same key, altered amount
+    payload2 = {
+        "sender_user_id": "usr_alice",
+        "recipient_user_id": "usr_bob",
+        "currency": "USD",
+        "amount": 5000,
+    }
+    res2 = client.post("/transfers", json=payload2, headers=key_headers)
+    assert res2.status_code == 400
+    data = res2.get_json()
+    assert data["error"] == "Bad Request"
+    assert "Idempotency-Key reused with different request payload" in data["message"]
+
+    # Verify Alice balance was only debited for the first transfer (2000 minor units)
+    bal_res = client.get("/users/usr_alice/balances")
+    assert bal_res.get_json()["balances"]["USD"] == 98000
+
+
+def test_accept_quote_api_idempotency_payload_mismatch_bad_request(client):
+    """Reusing Idempotency-Key with different payload in /quotes/accept returns 400 Bad Request."""
+    # Create two different quotes
+    q1 = client.post(
+        "/quotes",
+        json={"user_id": "usr_alice", "from_currency": "USD", "to_currency": "EUR", "from_amount": 5000},
+    ).get_json()["quote_id"]
+
+    q2 = client.post(
+        "/quotes",
+        json={"user_id": "usr_alice", "from_currency": "USD", "to_currency": "EUR", "from_amount": 5000},
+    ).get_json()["quote_id"]
+
+    key_headers = {"Idempotency-Key": "idem-api-quote-mismatch"}
+
+    res1 = client.post(
+        "/quotes/accept",
+        json={"quote_id": q1, "user_id": "usr_alice"},
+        headers=key_headers,
+    )
+    assert res1.status_code == 200
+
+    # Re-send with same key but different quote_id
+    res2 = client.post(
+        "/quotes/accept",
+        json={"quote_id": q2, "user_id": "usr_alice"},
+        headers=key_headers,
+    )
+    assert res2.status_code == 400
+    data = res2.get_json()
+    assert data["error"] == "Bad Request"
+    assert "Idempotency-Key reused with different request payload" in data["message"]
+

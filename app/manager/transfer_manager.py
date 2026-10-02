@@ -7,9 +7,14 @@ from app.adapter.entities import (
     LedgerLegRecordEntity,
     TransactionRecordEntity,
 )
-from app.adapter.wallet_adapter import WalletAdapter, wallet_adapter
+from app.adapter.wallet_adapter import (
+    WalletAdapter,
+    compute_payload_hash,
+    wallet_adapter,
+)
 from app.exceptions import (
     IdempotencyConflictError,
+    IdempotencyPayloadMismatchError,
     TransferExecutionError,
     UserNotFoundError,
     WalletError,
@@ -29,25 +34,44 @@ class TransferManager:
     def transfer(self, request: P2PTransferRequestEntity) -> P2PTransferResponseEntity:
         """
         Executes a 3-hop P2P transfer:
-        1. Check idempotency via wallet_adapter.
+        1. Check idempotency and payload hash matching via wallet_adapter.
         2. Validate sender != recipient and both users exist via wallet_adapter.
-        3. Multi-hop execution via wallet_adapter:
+        3. Register PENDING transaction linked with idempotency key.
+        4. Multi-hop execution via wallet_adapter:
            - Leg 1: Sender(CCY) -> Pool: Outbound(CCY) [amount]
            - Leg 2: Pool: Outbound(CCY) -> Pool: Inbound(CCY) [amount]
            - Leg 3: Pool: Inbound(CCY) -> Recipient(CCY) [amount]
-        4. If any leg fails, perform LIFO compensation on all completed legs.
-        5. Mark transaction COMPLETED and cache idempotency result.
+        5. If any leg fails, perform LIFO compensation on all completed legs and mark tx REVERSED.
+        6. Mark transaction COMPLETED and cache response payload directly on transaction.
         """
-        # 1. Idempotency check
+        # 1. Idempotency & payload hash verification
+        incoming_hash = None
         if request.idempotency_key:
-            existing = self.wallet_adapter.check_or_reserve_idempotency(request.idempotency_key)
+            payload_to_hash = {
+                "sender_user_id": request.sender_user_id,
+                "recipient_user_id": request.recipient_user_id,
+                "currency": request.currency,
+                "amount": request.amount,
+            }
+            incoming_hash = compute_payload_hash(payload_to_hash)
+            existing = self.wallet_adapter.get_transaction_by_idempotency_key(
+                request.idempotency_key
+            )
             if existing:
-                if existing.status == "PROCESSING":
+                if (
+                    existing.request_hash
+                    and incoming_hash
+                    and existing.request_hash != incoming_hash
+                ):
+                    raise IdempotencyPayloadMismatchError(
+                        "Idempotency-Key reused with different request payload"
+                    )
+                if existing.status == "PENDING":
                     raise IdempotencyConflictError(
                         "A request with this Idempotency-Key is currently processing"
                     )
-                if existing.status == "COMPLETED":
-                    return P2PTransferResponseEntity(**existing.response_data)
+                if existing.status == "COMPLETED" and existing.response_payload:
+                    return P2PTransferResponseEntity(**existing.response_payload)
 
         # 2. Validations
         if request.sender_user_id == request.recipient_user_id:
@@ -59,27 +83,26 @@ class TransferManager:
         if not self.wallet_adapter.user_exists(request.recipient_user_id):
             raise UserNotFoundError(f"Recipient user '{request.recipient_user_id}' does not exist")
 
-        # 3. Multi-hop pool movements
+        # 3. Create or lease PENDING transaction
         tx_id = f"tx_p2p_{uuid.uuid4().hex[:10]}"
-        sender_acc = f"{request.sender_user_id}:{request.currency}"
-        recipient_acc = f"{request.recipient_user_id}:{request.currency}"
-        pool_outbound = f"pool:outbound:{request.currency}"
-        pool_inbound = f"pool:inbound:{request.currency}"
-
-        tx_record = TransactionRecordEntity(
-            transaction_id=tx_id,
+        tx_record = self.wallet_adapter.get_or_create_transaction(
+            tx_id=tx_id,
             user_id=request.sender_user_id,
-            transaction_type="P2P_TRANSFER",
-            status="PENDING",
-            legs=[],
+            tx_type="P2P_TRANSFER",
             metadata={
                 "sender_user_id": request.sender_user_id,
                 "recipient_user_id": request.recipient_user_id,
                 "currency": request.currency,
                 "amount": request.amount,
             },
+            idempotency_key=request.idempotency_key,
+            request_hash=incoming_hash,
         )
-        self.wallet_adapter.record_transaction(tx_record)
+
+        sender_acc = f"{request.sender_user_id}:{request.currency}"
+        recipient_acc = f"{request.recipient_user_id}:{request.currency}"
+        pool_outbound = f"pool:outbound:{request.currency}"
+        pool_inbound = f"pool:inbound:{request.currency}"
 
         planned_legs = [
             LedgerLegRecordEntity(
@@ -133,16 +156,14 @@ class TransferManager:
                 )
                 self.wallet_adapter.execute_transfer_leg(rev_leg)
 
-            tx_record.status = "REVERSED"
+            self.wallet_adapter.fail_or_reverse_transaction(tx_id, status="REVERSED")
             raise TransferExecutionError(
                 f"Transfer failed: {str(exc)}; reversing operations completed successfully",
                 legs_executed=len(completed_legs),
                 reversed=True,
             ) from exc
 
-        # 5. Finalize transaction
-        tx_record.status = "COMPLETED"
-
+        # 5. Finalize transaction and cache response payload directly on the transaction
         response = P2PTransferResponseEntity(
             transaction_id=tx_id,
             sender_user_id=request.sender_user_id,
@@ -153,10 +174,10 @@ class TransferManager:
             legs_executed=len(completed_legs),
         )
 
-        if request.idempotency_key:
-            self.wallet_adapter.save_idempotency_response(
-                request.idempotency_key, status_code=200, response_data=response.to_dict()
-            )
+        self.wallet_adapter.complete_transaction(
+            tx_id=tx_id,
+            response_payload=response.to_dict(),
+        )
 
         return response
 

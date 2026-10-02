@@ -1,96 +1,110 @@
-"""Wallet Adapter handling user balances and all money movement (P2P and FX)."""
+"""Wallet Adapter handling user balances and all money movement (P2P and FX) using resource locks."""
 
+import hashlib
+import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from app.adapter.database import InMemoryDatabase, default_db
 from app.adapter.entities import (
     AccountRecordEntity,
-    IdempotencyRecordEntity,
     LedgerLegRecordEntity,
     TransactionRecordEntity,
 )
-from app.exceptions import AccountNotFoundError, InsufficientFundsError
+from app.exceptions import (
+    AccountNotFoundError,
+    IdempotencyConflictError,
+    IdempotencyPayloadMismatchError,
+    InsufficientFundsError,
+)
+
+
+def compute_payload_hash(payload: Dict[str, Any]) -> str:
+    """Computes a deterministic SHA-256 hash of the canonical request payload."""
+    canonical_json = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical_json.encode("utf-8")).hexdigest()
 
 
 class WalletAdapter:
     """
     Adapter responsible for user balance queries and money movement execution
     (both P2P transfers and FX conversion legs across pools).
+    Enforces resource-level locking strictly on involved accounts during money movements.
     """
 
     def __init__(self, db: Optional[InMemoryDatabase] = None) -> None:
         self.db = db or default_db
 
     def user_exists(self, user_id: str) -> bool:
-        """Check if any account belongs to the given user ID."""
-        with self.db.global_lock:
-            return any(acc.owner_id == user_id for acc in self.db.accounts.values())
+        """Check if any account belongs to the given user ID (lock-free)."""
+        return any(acc.owner_id == user_id for acc in self.db.accounts.values())
 
     def get_user_balances(self, user_id: str) -> Dict[str, int]:
-        """Return non-negative currency balances for a user."""
-        with self.db.global_lock:
-            balances: Dict[str, int] = {}
-            for acc in self.db.accounts.values():
-                if acc.owner_id == user_id:
-                    balances[acc.currency] = acc.balance
-            return balances
+        """Return non-negative currency balances for a user (lock-free)."""
+        balances: Dict[str, int] = {}
+        for acc in self.db.accounts.values():
+            if acc.owner_id == user_id:
+                balances[acc.currency] = acc.balance
+        return balances
 
     def get_account(self, account_id: str) -> Optional[AccountRecordEntity]:
-        """Retrieve an account by its unique account_id."""
-        with self.db.global_lock:
-            return self.db.accounts.get(account_id)
+        """Retrieve an account by its unique account_id (lock-free)."""
+        return self.db.accounts.get(account_id)
 
     def get_or_create_account(
         self, owner_id: str, currency: str, is_pool: bool = False
     ) -> AccountRecordEntity:
         """Get an existing account or create a new one with zero balance."""
         account_id = f"{owner_id}:{currency}"
-        with self.db.global_lock:
-            if account_id not in self.db.accounts:
-                self.db.accounts[account_id] = AccountRecordEntity(
+        if account_id not in self.db.accounts:
+            self.db.accounts.setdefault(
+                account_id,
+                AccountRecordEntity(
                     account_id=account_id,
                     owner_id=owner_id,
                     currency=currency,
                     balance=0,
                     is_pool=is_pool,
-                )
-            return self.db.accounts[account_id]
+                ),
+            )
+        return self.db.accounts[account_id]
 
     def execute_transfer_leg(self, leg: LedgerLegRecordEntity) -> LedgerLegRecordEntity:
         """
         Atomically executes a single debit/credit leg between two accounts.
-        Enforces sorted two-account lock acquisition to eliminate deadlocks.
-        Used for both P2P transfers and FX conversion movements across pools.
+        Enforces sorted two-account lock acquisition on involved resources to eliminate deadlocks.
+        No global lock is acquired.
         """
-        acc_first, acc_second = sorted([leg.from_account_id, leg.to_account_id])
-        lock1 = self.db.get_lock(acc_first)
-        lock2 = self.db.get_lock(acc_second)
+        from_acc = self.db.accounts.get(leg.from_account_id)
+        if not from_acc:
+            if leg.from_account_id.startswith("pool:"):
+                from_acc = self.get_or_create_account(
+                    owner_id=leg.from_account_id.split(":")[1],
+                    currency=leg.currency,
+                    is_pool=True,
+                )
+            else:
+                raise AccountNotFoundError(
+                    f"Source account {leg.from_account_id} not found"
+                )
 
-        with lock1:
-            with lock2:
-                from_acc = self.db.accounts.get(leg.from_account_id)
-                to_acc = self.db.accounts.get(leg.to_account_id)
+        to_acc = self.db.accounts.get(leg.to_account_id)
+        if not to_acc:
+            owner = leg.to_account_id.split(":")[0]
+            is_pool = leg.to_account_id.startswith("pool:")
+            to_acc = self.get_or_create_account(
+                owner_id=owner, currency=leg.currency, is_pool=is_pool
+            )
 
-                if not from_acc:
-                    if leg.from_account_id.startswith("pool:"):
-                        from_acc = self.get_or_create_account(
-                            owner_id=leg.from_account_id.split(":")[1],
-                            currency=leg.currency,
-                            is_pool=True,
-                        )
-                    else:
-                        raise AccountNotFoundError(
-                            f"Source account {leg.from_account_id} not found"
-                        )
+        # Deterministic lock ordering on the two involved accounts
+        first, second = (
+            (from_acc, to_acc)
+            if from_acc.account_id < to_acc.account_id
+            else (to_acc, from_acc)
+        )
 
-                if not to_acc:
-                    owner = leg.to_account_id.split(":")[0]
-                    is_pool = leg.to_account_id.startswith("pool:")
-                    to_acc = self.get_or_create_account(
-                        owner_id=owner, currency=leg.currency, is_pool=is_pool
-                    )
-
+        with first.lock:
+            with second.lock:
                 # Check non-negative constraint on user accounts
                 if not from_acc.is_pool and from_acc.balance < leg.amount:
                     raise InsufficientFundsError(
@@ -113,55 +127,91 @@ class WalletAdapter:
 
     def record_transaction(self, tx: TransactionRecordEntity) -> TransactionRecordEntity:
         """Persist or update a transaction record."""
-        with self.db.global_lock:
-            self.db.transactions[tx.transaction_id] = tx
-            return tx
+        self.db.transactions[tx.transaction_id] = tx
+        if tx.idempotency_key:
+            self.db.transactions_by_idempotency[tx.idempotency_key] = tx
+        return tx
 
     def get_transaction(self, tx_id: str) -> Optional[TransactionRecordEntity]:
-        """Retrieve a transaction by transaction_id."""
-        with self.db.global_lock:
-            return self.db.transactions.get(tx_id)
+        """Retrieve a transaction by transaction_id (lock-free)."""
+        return self.db.transactions.get(tx_id)
+
+    def get_transaction_by_idempotency_key(
+        self, idempotency_key: str
+    ) -> Optional[TransactionRecordEntity]:
+        """Retrieve a transaction by idempotency_key (lock-free)."""
+        return self.db.transactions_by_idempotency.get(idempotency_key)
 
     def get_user_transactions(self, user_id: str) -> List[TransactionRecordEntity]:
-        """Retrieve all transactions involving a user, sorted descending by created_at."""
-        with self.db.global_lock:
-            tx_list: List[TransactionRecordEntity] = []
-            for tx in self.db.transactions.values():
-                if tx.user_id == user_id:
-                    tx_list.append(tx)
-                elif (
-                    tx.metadata.get("recipient_user_id") == user_id
-                    or tx.metadata.get("sender_user_id") == user_id
-                ):
-                    tx_list.append(tx)
-            tx_list.sort(key=lambda t: t.created_at, reverse=True)
-            return tx_list
+        """Retrieve all transactions involving a user, sorted descending by created_at (lock-free)."""
+        tx_list: List[TransactionRecordEntity] = []
+        for tx in self.db.transactions.values():
+            if tx.user_id == user_id:
+                tx_list.append(tx)
+            elif (
+                tx.metadata.get("recipient_user_id") == user_id
+                or tx.metadata.get("sender_user_id") == user_id
+            ):
+                tx_list.append(tx)
+        tx_list.sort(key=lambda t: t.created_at, reverse=True)
+        return tx_list
 
-    def check_or_reserve_idempotency(self, key: str) -> Optional[IdempotencyRecordEntity]:
+    def get_or_create_transaction(
+        self,
+        tx_id: str,
+        user_id: str,
+        tx_type: str,
+        metadata: Dict[str, Any],
+        idempotency_key: Optional[str] = None,
+        request_hash: Optional[str] = None,
+    ) -> TransactionRecordEntity:
         """
-        Check if an idempotency key exists.
-        If it does, return the existing record.
-        If not, atomically reserve it with status 'PROCESSING' and return None.
+        Get existing transaction by idempotency key or create a new PENDING transaction.
+        Rejects payload hash mismatches with IdempotencyPayloadMismatchError.
+        Rejects in-flight requests with IdempotencyConflictError.
         """
-        with self.db.global_lock:
-            if key in self.db.idempotency:
-                return self.db.idempotency[key]
-            self.db.idempotency[key] = IdempotencyRecordEntity(
-                idempotency_key=key,
-                status="PROCESSING",
-            )
-            return None
+        if idempotency_key:
+            if idempotency_key in self.db.transactions_by_idempotency:
+                existing = self.db.transactions_by_idempotency[idempotency_key]
+                if existing.request_hash and request_hash and existing.request_hash != request_hash:
+                    raise IdempotencyPayloadMismatchError(
+                        "Idempotency-Key reused with different request payload"
+                    )
+                if existing.status == "PENDING":
+                    raise IdempotencyConflictError(
+                        "A request with this Idempotency-Key is currently processing"
+                    )
+                return existing
 
-    def save_idempotency_response(
-        self, key: str, status_code: int, response_data: Dict[str, Any]
+        tx = TransactionRecordEntity(
+            transaction_id=tx_id,
+            user_id=user_id,
+            transaction_type=tx_type,
+            status="PENDING",
+            idempotency_key=idempotency_key,
+            request_hash=request_hash,
+            metadata=metadata,
+        )
+        self.db.transactions[tx_id] = tx
+        if idempotency_key:
+            self.db.transactions_by_idempotency[idempotency_key] = tx
+        return tx
+
+    def complete_transaction(
+        self, tx_id: str, response_payload: Dict[str, Any]
     ) -> None:
-        """Mark idempotency record as COMPLETED with the cached response."""
-        with self.db.global_lock:
-            if key in self.db.idempotency:
-                rec = self.db.idempotency[key]
-                rec.status = "COMPLETED"
-                rec.response_code = status_code
-                rec.response_data = response_data
+        """Mark transaction as COMPLETED and cache response payload."""
+        if tx_id in self.db.transactions:
+            tx = self.db.transactions[tx_id]
+            tx.status = "COMPLETED"
+            tx.response_payload = response_payload
+
+    def fail_or_reverse_transaction(
+        self, tx_id: str, status: str = "REVERSED"
+    ) -> None:
+        """Mark transaction as REVERSED or FAILED."""
+        if tx_id in self.db.transactions:
+            self.db.transactions[tx_id].status = status
 
 
 # Default singleton instance

@@ -39,11 +39,19 @@ The service must be initialized with a base state (pre-seeded users, balances, a
 ### 2.6 Failure Compensation (Reversing Operations)
 - If any step in the multi-hop balance movement fails mid-flight (e.g., recipient invalid, transfer constraint violated, or injected simulated failure), the system must execute compensating reversing operations in reverse order (LIFO) to return the system and user balances to their original consistent state.
 
-### 2.7 Concurrency & Idempotency
-- **Concurrency**: Operations must be thread-safe. Concurrent operations on the same user or pool must not result in race conditions, negative balances, or deadlocks.
-- **Idempotency**: Mutating requests (transfers, quote executions) must accept an idempotency key to prevent double-spending or duplicate executions.
+### 2.7 Fine-Grained Resource Locking (No Global Locks)
+- **Elimination of Global Locks**: Coarse global locks are prohibited. Database reads, rate lookups, and quote generation must not acquire global locks.
+- **Resource-Level Locking During Money Movement**: Locks must ONLY be acquired when performing money movement, and ONLY on the involved resources (the accounts being debited/credited).
+- **Deadlock Prevention**: Resource locks for the involved accounts are acquired in a deterministic order (e.g. sorted by account identifier).
+- **Per-Account Lock**: Each account entity encapsulates its own lock.
 
-### 2.8 Seed Base State
+### 2.8 Transaction-Bound Idempotency & Payload Hashing
+- **No Standalone Idempotency Entity**: The `idempotency_key`, `request_hash`, and cached response payload are stored directly on the `TransactionRecordEntity`.
+- **Deterministic Payload Hash**: When an `Idempotency-Key` is provided, the service computes a deterministic SHA-256 hash of the canonical request payload.
+- **Payload Mismatch Validation (400 Bad Request)**: If an incoming request uses an existing `Idempotency-Key` with a different payload hash, the server MUST reject it with a **400 Bad Request** error (`"Idempotency-Key reused with different request payload"`).
+- **Atomic Registration**: When a mutating request arrives with an `Idempotency-Key`, it is linked to the `TransactionRecordEntity`. If a matching transaction is `PENDING`, a 409 Conflict is returned. Once `COMPLETED`, repeated matching requests return the transaction's stored response.
+
+### 2.9 Seed Base State
 - Preloaded accounts (e.g., Alice, Bob, Charlie) with starting balances in minor units.
 - Preloaded FX exchange rates table.
 - System pool accounts for outbound, inbound, FX reserve, and fee collection.
@@ -51,7 +59,10 @@ The service must be initialized with a base state (pre-seeded users, balances, a
 ---
 
 ## 3. Architecture & Manager Organization
-- **In-Memory Storage (Single Source of Truth)**: Centralized `InMemoryWalletRepository` (the adapter layer) that encapsulates all in-memory entities (`accounts`, `quotes`, `transactions`, `idempotency`, `rates`) and fine-grained account locks.
+- **In-Memory Storage (Single Source of Truth)**: Centralized `InMemoryDatabase` managing raw collections.
+- **Split Adapters**:
+  1. `WalletAdapter`: Manages user balances, account lookups, and all money movements (P2P and FX ledger movements across pools) using fine-grained resource locks on involved accounts.
+  2. `QuoteAdapter`: Manages FX quote persistence, TTL status, and exchange rates without locks.
 - **Layered Architecture**: Strict `Service` $\rightarrow$ `Manager` $\rightarrow$ `Adapter` pattern.
 - **Domain Manager Organization**:
   1. **User Account Manager**: Handles user balance retrieval and transaction history queries.
