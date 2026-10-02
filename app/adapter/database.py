@@ -47,7 +47,7 @@ class InMemoryDatabase:
 
         # Preloaded system settlement pools (USD, EUR, GBP, JPY)
         supported_currencies = ["USD", "EUR", "GBP", "JPY"]
-        pool_prefixes = ["pool:outbound", "pool:inbound", "pool:fee"]
+        pool_prefixes = ["pool:outbound", "pool:inbound", "pool:fee", "pool:fx"]
         for prefix in pool_prefixes:
             for curr in supported_currencies:
                 acc_id = f"{prefix}:{curr}"

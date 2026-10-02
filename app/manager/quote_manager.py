@@ -1,5 +1,4 @@
-"""Quote Manager handling FX rate quotes, TTL expiry, and cross-currency conversions."""
-
+from decimal import Decimal, ROUND_HALF_EVEN
 import uuid
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -38,8 +37,8 @@ from app.manager.entities import (
 class QuoteManager:
     """
     Manages FX rate quotes, 30s TTL expiry, and cross-currency FX conversion execution.
-    - Uses QuoteAdapter for rates, quote persistence, and status.
-    - Uses WalletAdapter for user balance validation and cross-currency money movement legs across pools.
+    - Uses QuoteAdapter for rates, quote persistence, locking, and atomic status claims.
+    - Uses WalletAdapter for user balance validation and 5-leg currency-conserved balance movement legs.
     """
 
     def __init__(
@@ -58,7 +57,7 @@ class QuoteManager:
 
     def create_quote(self, request: CreateQuoteRequestEntity) -> QuoteResponseEntity:
         """
-        Calculates converted amount and fees in minor units.
+        Calculates converted amount and fees in minor units using Decimal banker's rounding (ROUND_HALF_EVEN).
         Sets TTL to now + 30 seconds and persists quote with status PENDING.
         """
         if not self.wallet_adapter.user_exists(request.user_id):
@@ -71,8 +70,18 @@ class QuoteManager:
             )
 
         fee_pct = self.quote_adapter.get_fee_percentage()
-        gross_to_amount = int(request.from_amount * rate)
-        fee_amount = max(1, int(gross_to_amount * fee_pct))
+
+        # Decimal precision calculations to prevent float truncation errors
+        from_amount_dec = Decimal(request.from_amount)
+        rate_dec = Decimal(str(rate))
+        fee_pct_dec = Decimal(str(fee_pct))
+
+        gross_dec = (from_amount_dec * rate_dec).quantize(Decimal("1"), rounding=ROUND_HALF_EVEN)
+        gross_to_amount = int(gross_dec)
+
+        fee_dec = (gross_dec * fee_pct_dec).quantize(Decimal("1"), rounding=ROUND_HALF_EVEN)
+        fee_amount = max(1, int(fee_dec))
+
         net_to_amount = gross_to_amount - fee_amount
 
         if net_to_amount <= 0:
@@ -119,14 +128,15 @@ class QuoteManager:
         """
         Accepts and executes an FX conversion:
         1. Check idempotency and payload hash matching via wallet_adapter.
-        2. Validate quote exists in quote_adapter, belongs to user, is PENDING, and within 30s TTL.
+        2. Atomically claim quote under quote.lock via quote_adapter (PENDING -> PROCESSING).
         3. Register PENDING transaction.
-        4. Execute multi-hop pool sequence via wallet_adapter using fine-grained resource locks:
-           - Leg 1: User(from_curr) -> Pool: FX Outbound(from_curr) [from_amount]
-           - Leg 2: Pool: FX Outbound(from_curr) -> Pool: FX Inbound(to_curr) [gross_to_amount]
-           - Leg 3: Pool: FX Inbound(to_curr) -> Pool: Fee(to_curr) [fee_amount]
-           - Leg 4: Pool: FX Inbound(to_curr) -> User(to_curr) [net_to_amount]
-        5. If any leg fails, perform LIFO compensation on all completed legs and mark tx REVERSED.
+        4. Execute 5-leg currency-conserved pool sequence via wallet_adapter using resource locks:
+           - Leg 1: User(from_curr) -> Pool: Outbound(from_curr) [from_amount]
+           - Leg 2: Pool: Outbound(from_curr) -> Pool: FX(from_curr) [from_amount]
+           - Leg 3: Pool: FX(to_curr) -> Pool: Inbound(to_curr) [gross_to_amount]
+           - Leg 4: Pool: Inbound(to_curr) -> Pool: Fee(to_curr) [fee_amount]
+           - Leg 5: Pool: Inbound(to_curr) -> User(to_curr) [net_to_amount]
+        5. If any leg fails, perform LIFO compensation on completed legs and mark tx REVERSED, quote FAILED.
         6. Mark quote as ACCEPTED and record transaction as COMPLETED caching response payload.
         """
         # 1. Idempotency & payload hash verification
@@ -156,25 +166,8 @@ class QuoteManager:
                 if existing.status == "COMPLETED" and existing.response_payload:
                     return AcceptQuoteResponseEntity(**existing.response_payload)
 
-        # 2. Quote validations
-        quote = self.quote_adapter.get_quote(request.quote_id)
-        if not quote:
-            raise QuoteNotFoundError(f"Quote '{request.quote_id}' does not exist")
-
-        if quote.user_id != request.user_id:
-            raise InvalidQuoteError("Quote does not belong to the requesting user")
-
-        if quote.status != "PENDING":
-            raise InvalidQuoteError(f"Quote '{request.quote_id}' is already {quote.status}")
-
-        # Check 30s TTL
-        clean_expiry = quote.expires_at.rstrip("Z")
-        expires_dt = datetime.fromisoformat(clean_expiry)
-        if datetime.utcnow() > expires_dt:
-            self.quote_adapter.update_quote_status(quote.quote_id, "EXPIRED")
-            raise QuoteExpiredError(
-                f"Quote '{quote.quote_id}' has expired (validity was 30 seconds)"
-            )
+        # 2. Atomically claim quote under quote lock (PENDING -> PROCESSING)
+        quote = self.quote_adapter.claim_quote_for_execution(request.quote_id, request.user_id)
 
         # 3. Register PENDING transaction
         tx_id = f"tx_fx_{uuid.uuid4().hex[:10]}"
@@ -195,13 +188,18 @@ class QuoteManager:
             request_hash=incoming_hash,
         )
 
+        # 4. Multi-hop 5-leg currency-conserved balance movement
         user_src_acc = f"{quote.user_id}:{quote.from_currency}"
-        user_tgt_acc = f"{quote.user_id}:{quote.to_currency}"
         pool_outbound = f"pool:outbound:{quote.from_currency}"
+        pool_fx_src = f"pool:fx:{quote.from_currency}"
+
+        pool_fx_tgt = f"pool:fx:{quote.to_currency}"
         pool_inbound = f"pool:inbound:{quote.to_currency}"
         pool_fee = f"pool:fee:{quote.to_currency}"
+        user_tgt_acc = f"{quote.user_id}:{quote.to_currency}"
 
         planned_legs = [
+            # Leg 1: User(from_curr) -> Pool: Outbound(from_curr)
             LedgerLegRecordEntity(
                 leg_id=f"leg_{uuid.uuid4().hex[:8]}",
                 transaction_id=tx_id,
@@ -211,28 +209,41 @@ class QuoteManager:
                 currency=quote.from_currency,
                 amount=quote.from_amount,
             ),
+            # Leg 2: Pool: Outbound(from_curr) -> Pool: FX(from_curr)
             LedgerLegRecordEntity(
                 leg_id=f"leg_{uuid.uuid4().hex[:8]}",
                 transaction_id=tx_id,
                 step_number=2,
                 from_account_id=pool_outbound,
-                to_account_id=pool_inbound,
-                currency=quote.to_currency,
-                amount=quote.gross_to_amount,
+                to_account_id=pool_fx_src,
+                currency=quote.from_currency,
+                amount=quote.from_amount,
             ),
+            # Leg 3: Pool: FX(to_curr) -> Pool: Inbound(to_curr)
             LedgerLegRecordEntity(
                 leg_id=f"leg_{uuid.uuid4().hex[:8]}",
                 transaction_id=tx_id,
                 step_number=3,
+                from_account_id=pool_fx_tgt,
+                to_account_id=pool_inbound,
+                currency=quote.to_currency,
+                amount=quote.gross_to_amount,
+            ),
+            # Leg 4: Pool: Inbound(to_curr) -> Pool: Fee(to_curr)
+            LedgerLegRecordEntity(
+                leg_id=f"leg_{uuid.uuid4().hex[:8]}",
+                transaction_id=tx_id,
+                step_number=4,
                 from_account_id=pool_inbound,
                 to_account_id=pool_fee,
                 currency=quote.to_currency,
                 amount=quote.fee_amount,
             ),
+            # Leg 5: Pool: Inbound(to_curr) -> User(to_curr)
             LedgerLegRecordEntity(
                 leg_id=f"leg_{uuid.uuid4().hex[:8]}",
                 transaction_id=tx_id,
-                step_number=4,
+                step_number=5,
                 from_account_id=pool_inbound,
                 to_account_id=user_tgt_acc,
                 currency=quote.to_currency,
@@ -246,7 +257,8 @@ class QuoteManager:
                 executed = self.wallet_adapter.execute_transfer_leg(leg)
                 completed_legs.append(executed)
         except Exception as exc:
-            # 4. Saga Compensation in LIFO order
+            # 5. Saga Compensation in LIFO order
+            self.quote_adapter.update_quote_status(quote.quote_id, "FAILED")
             step_num = len(completed_legs) + 1
             for comp_target in reversed(completed_legs):
                 step_num += 1
@@ -263,14 +275,13 @@ class QuoteManager:
                 self.wallet_adapter.execute_transfer_leg(rev_leg)
 
             self.wallet_adapter.fail_or_reverse_transaction(tx_id, status="REVERSED")
-            self.quote_adapter.update_quote_status(quote.quote_id, "FAILED")
             raise TransferExecutionError(
                 f"FX conversion failed: {str(exc)}; reversing operations completed successfully",
                 legs_executed=len(completed_legs),
                 reversed=True,
             ) from exc
 
-        # 5. Finalize transaction and quote
+        # 6. Finalize transaction and quote
         self.quote_adapter.update_quote_status(quote.quote_id, "ACCEPTED")
 
         response = AcceptQuoteResponseEntity(

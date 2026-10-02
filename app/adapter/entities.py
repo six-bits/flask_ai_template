@@ -41,7 +41,7 @@ class AccountRecordEntity:
 
 @dataclass
 class QuoteRecordEntity:
-    """Storage entity for an FX rate quote."""
+    """Storage entity for an FX rate quote, owning its own lock for thread-safe state transitions."""
     quote_id: str
     user_id: str
     from_currency: str
@@ -53,11 +53,14 @@ class QuoteRecordEntity:
     fee_amount: int          # Minor units
     net_to_amount: int       # Minor units
     expires_at: str          # ISO-8601 timestamp string
-    status: str = "PENDING"  # PENDING | ACCEPTED | EXPIRED | FAILED
+    status: str = "PENDING"  # PENDING | PROCESSING | ACCEPTED | EXPIRED | FAILED
     created_at: str = field(default_factory=lambda: datetime.utcnow().isoformat())
+    lock: threading.RLock = field(default_factory=threading.RLock, repr=False, compare=False)
 
     def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        d.pop("lock", None)
+        return d
 
 
 @dataclass

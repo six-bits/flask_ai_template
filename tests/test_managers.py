@@ -1,5 +1,6 @@
 """Unit tests for the domain managers (UserAccountManager, QuoteManager, TransferManager)."""
 
+import concurrent.futures
 import time
 from unittest.mock import patch
 import pytest
@@ -441,5 +442,178 @@ def test_accept_quote_idempotency_replay_and_mismatch(managers):
             )
         )
     assert "Idempotency-Key reused with different request payload" in str(exc_info.value)
+
+
+def test_concurrent_quote_acceptance_race_prevented_by_quote_lock(managers):
+    """
+    Verify that concurrent threads attempting to accept the SAME quote are serialized
+    by quote.lock, so exactly 1 thread succeeds and all other threads are rejected.
+    """
+    quote_mgr = managers["quote_mgr"]
+    wallet = managers["wallet_adapter"]
+
+    # 1. Create a quote for Alice (10,000 USD to EUR)
+    quote = quote_mgr.create_quote(
+        CreateQuoteRequestEntity(
+            user_id="usr_alice",
+            from_currency="USD",
+            to_currency="EUR",
+            from_amount=10000,
+        )
+    )
+
+    initial_alice_usd = wallet.get_account("usr_alice:USD").balance
+    initial_alice_eur = wallet.get_account("usr_alice:EUR").balance
+
+    num_threads = 10
+    results = []
+    errors = []
+
+    def attempt_accept(i: int):
+        try:
+            # Each thread uses a distinct idempotency key so we test quote locking, not idempotency replay
+            res = quote_mgr.accept_quote(
+                AcceptQuoteRequestEntity(
+                    quote_id=quote.quote_id,
+                    user_id="usr_alice",
+                    idempotency_key=f"concurrent_accept_key_{i}",
+                )
+            )
+            return ("SUCCESS", res)
+        except InvalidQuoteError as e:
+            return ("INVALID_QUOTE", str(e))
+        except Exception as e:
+            return ("OTHER_ERROR", str(e))
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
+        futures = [executor.submit(attempt_accept, i) for i in range(num_threads)]
+        for f in concurrent.futures.as_completed(futures):
+            status, payload = f.result()
+            if status == "SUCCESS":
+                results.append(payload)
+            else:
+                errors.append((status, payload))
+
+    # Exactly 1 thread must succeed
+    assert len(results) == 1
+    assert results[0].status == "COMPLETED"
+
+    # All other 9 threads must be rejected with InvalidQuoteError
+    assert len(errors) == num_threads - 1
+    for err_type, err_msg in errors:
+        assert err_type == "INVALID_QUOTE"
+        assert "already" in err_msg  # e.g. "already PROCESSING" or "already ACCEPTED"
+
+    # Verify Alice's balance was debited and credited ONLY ONCE
+    final_alice_usd = wallet.get_account("usr_alice:USD").balance
+    final_alice_eur = wallet.get_account("usr_alice:EUR").balance
+    assert final_alice_usd == initial_alice_usd - 10000
+    assert final_alice_eur == initial_alice_eur + results[0].credited_amount
+
+
+def test_fx_currency_conservation_and_pool_netting(managers):
+    """
+    Verify 5-leg currency conservation:
+    1. Every leg operates on identical source and destination currency.
+    2. pool:outbound:USD and pool:inbound:EUR net out to 0.
+    3. pool:fx:USD and pool:fx:EUR hold exact counterparty treasury positions.
+    """
+    quote_mgr = managers["quote_mgr"]
+    wallet = managers["wallet_adapter"]
+
+    quote = quote_mgr.create_quote(
+        CreateQuoteRequestEntity(
+            user_id="usr_alice",
+            from_currency="USD",
+            to_currency="EUR",
+            from_amount=10000,
+        )
+    )
+
+    res = quote_mgr.accept_quote(
+        AcceptQuoteRequestEntity(
+            quote_id=quote.quote_id,
+            user_id="usr_alice",
+        )
+    )
+    assert res.status == "COMPLETED"
+
+    tx = wallet.get_transaction(res.transaction_id)
+    assert tx is not None
+    assert len(tx.legs) == 5
+
+    # Check Leg 1: Alice(USD) -> pool:outbound:USD [USD]
+    assert tx.legs[0].from_account_id == "usr_alice:USD"
+    assert tx.legs[0].to_account_id == "pool:outbound:USD"
+    assert tx.legs[0].currency == "USD"
+    assert tx.legs[0].amount == 10000
+
+    # Check Leg 2: pool:outbound:USD -> pool:fx:USD [USD]
+    assert tx.legs[1].from_account_id == "pool:outbound:USD"
+    assert tx.legs[1].to_account_id == "pool:fx:USD"
+    assert tx.legs[1].currency == "USD"
+    assert tx.legs[1].amount == 10000
+
+    # Check Leg 3: pool:fx:EUR -> pool:inbound:EUR [EUR]
+    assert tx.legs[2].from_account_id == "pool:fx:EUR"
+    assert tx.legs[2].to_account_id == "pool:inbound:EUR"
+    assert tx.legs[2].currency == "EUR"
+    assert tx.legs[2].amount == 9200
+
+    # Check Leg 4: pool:inbound:EUR -> pool:fee:EUR [EUR]
+    assert tx.legs[3].from_account_id == "pool:inbound:EUR"
+    assert tx.legs[3].to_account_id == "pool:fee:EUR"
+    assert tx.legs[3].currency == "EUR"
+    assert tx.legs[3].amount == 92
+
+    # Check Leg 5: pool:inbound:EUR -> usr_alice:EUR [EUR]
+    assert tx.legs[4].from_account_id == "pool:inbound:EUR"
+    assert tx.legs[4].to_account_id == "usr_alice:EUR"
+    assert tx.legs[4].currency == "EUR"
+    assert tx.legs[4].amount == 9108
+
+    # Verify pool balances
+    outbound_usd = wallet.get_account("pool:outbound:USD")
+    inbound_eur = wallet.get_account("pool:inbound:EUR")
+    fx_usd = wallet.get_account("pool:fx:USD")
+    fx_eur = wallet.get_account("pool:fx:EUR")
+    fee_eur = wallet.get_account("pool:fee:EUR")
+
+    assert outbound_usd.balance == 0   # Netted clean
+    assert inbound_eur.balance == 0    # Netted clean
+    assert fx_usd.balance == 10000     # Bank absorbed 10,000 USD
+    assert fx_eur.balance == -9200     # Bank disbursed 9,200 EUR
+    assert fee_eur.balance == 92       # Fee earned
+
+
+def test_decimal_bankers_rounding_precision(managers):
+    """
+    Verify that rate conversions and fees use Decimal banker's rounding (ROUND_HALF_EVEN)
+    without IEEE-754 binary floating-point truncation.
+    """
+    quote_mgr = managers["quote_mgr"]
+    quote_adapter = managers["quote_adapter"]
+    wallet = managers["wallet_adapter"]
+
+    # Inject a custom rate with potential float truncation (e.g. rate 1.15)
+    quote_adapter.db.rates["USD/XYZ"] = 1.15
+    quote_adapter.db.accounts["usr_alice:XYZ"] = wallet.get_or_create_account(
+        "usr_alice", "XYZ", is_pool=False
+    )
+
+    # 100 * 1.15 in float is 114.99999999999999 -> int() would truncate to 114
+    # With Decimal quantize ROUND_HALF_EVEN, 100 * 1.15 is exactly 115!
+    quote = quote_mgr.create_quote(
+        CreateQuoteRequestEntity(
+            user_id="usr_alice",
+            from_currency="USD",
+            to_currency="XYZ",
+            from_amount=100,
+        )
+    )
+    assert quote.gross_to_amount == 115
+    assert quote.fee_amount == 1  # 1% of 115 = 1.15 -> rounds to 1
+    assert quote.net_to_amount == 114
+
 
 

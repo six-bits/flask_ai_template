@@ -20,21 +20,27 @@ The service must be initialized with a base state (pre-seeded users, balances, a
 - Users can query their balances for all held currencies.
 - Users can inspect their complete transaction history with legs and status.
 
-### 2.3 Time-Limited FX Quotes & Conversion
+### 2.3 Time-Limited FX Quotes & Conversion (With Decimal Precision & Quote Locking)
 - **Quote Generation**: A user can request an FX quote to convert an amount (`from_amount` in minor units) from `from_currency` to `to_currency`.
+- **Decimal Precision**: All rate and fee calculations must use `Decimal` with explicit banker's rounding (`ROUND_HALF_EVEN`) to prevent floating-point precision loss and truncation bugs.
 - **TTL**: Each quote has a strict validity window of **30 seconds**.
 - **Quote Execution**: User accepts the quote by providing `quote_id` in the request body schema. If accepted within the 30-second window, the conversion is executed at the quoted rate minus a specified small transaction fee. If expired, the quote cannot be accepted.
+- **Quote Concurrency & Locking**: `QuoteRecordEntity` encapsulates its own lock. State transition from `PENDING` to `PROCESSING` is executed atomically under the quote lock to guarantee a quote cannot be accepted multiple times concurrently.
 
 ### 2.4 Peer-to-Peer (P2P) Transfers
 - Users can send funds to other users within the system in minor units.
 
-### 2.5 Multi-Hop Pool Movement
+### 2.5 Multi-Hop Pool Movement & Currency Conservation
 - Money cannot simply jump directly from User A to User B in an unrecorded mutation.
-- **P2P Movement**: Must move through settlement pools:
-  $$\text{User A} \longrightarrow \text{Outbound Pool} \longrightarrow \text{Inbound Pool} \longrightarrow \text{User B}$$
-- **FX Movement**: Must move through cross-currency pools:
-  $$\text{User A (CCY A)} \longrightarrow \text{FX Outbound Pool (CCY A)} \longrightarrow \text{FX Inbound Pool (CCY B)} \longrightarrow \text{User A (CCY B)}$$
-  (along with fee transfer to a dedicated fee pool).
+- Every ledger leg must adhere to **currency conservation**: accounts are strictly single-currency, and a leg transfers value ONLY between two accounts of the identical currency.
+- **P2P Movement (3 Hops)**:
+  $$\text{User A (CCY)} \longrightarrow \text{Outbound Pool (CCY)} \longrightarrow \text{Inbound Pool (CCY)} \longrightarrow \text{User B (CCY)}$$
+- **FX Movement (5 Hops across FX Clearing Pools)**:
+  - Source Book (CCY A):
+    $$\text{User A (CCY A)} \longrightarrow \text{Outbound Pool (CCY A)} \longrightarrow \text{FX Clearing Pool (CCY A)}$$
+  - Target Book (CCY B):
+    $$\text{FX Clearing Pool (CCY B)} \longrightarrow \text{Inbound Pool (CCY B)} \longrightarrow \text{Fee Pool (CCY B)} + \text{User A (CCY B)}$$
+  - Intermediate pools remain balanced, and no single-currency account ever holds or moves foreign currency.
 
 ### 2.6 Failure Compensation (Reversing Operations)
 - If any step in the multi-hop balance movement fails mid-flight (e.g., recipient invalid, transfer constraint violated, or injected simulated failure), the system must execute compensating reversing operations in reverse order (LIFO) to return the system and user balances to their original consistent state.
@@ -43,7 +49,7 @@ The service must be initialized with a base state (pre-seeded users, balances, a
 - **Elimination of Global Locks**: Coarse global locks are prohibited. Database reads, rate lookups, and quote generation must not acquire global locks.
 - **Resource-Level Locking During Money Movement**: Locks must ONLY be acquired when performing money movement, and ONLY on the involved resources (the accounts being debited/credited).
 - **Deadlock Prevention**: Resource locks for the involved accounts are acquired in a deterministic order (e.g. sorted by account identifier).
-- **Per-Account Lock**: Each account entity encapsulates its own lock.
+- **Per-Resource Locks**: Each account entity owns an `RLock`, and each quote entity owns an `RLock`.
 
 ### 2.8 Transaction-Bound Idempotency & Payload Hashing
 - **No Standalone Idempotency Entity**: The `idempotency_key`, `request_hash`, and cached response payload are stored directly on the `TransactionRecordEntity`.

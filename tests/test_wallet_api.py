@@ -1,5 +1,4 @@
-"""Integration tests for all Wallet API endpoints."""
-
+import concurrent.futures
 import json
 import pytest
 
@@ -316,4 +315,53 @@ def test_accept_quote_api_idempotency_payload_mismatch_bad_request(client):
     data = res2.get_json()
     assert data["error"] == "Bad Request"
     assert "Idempotency-Key reused with different request payload" in data["message"]
+
+
+def test_accept_quote_api_5_legs_and_concurrency_race(client):
+    """
+    Verify:
+    1. FX conversion creates 5 currency-conserved legs.
+    2. Concurrent requests to accept the same quote result in exactly 1 success and 422 for the other.
+    """
+    # Create quote
+    q_res = client.post(
+        "/quotes",
+        json={"user_id": "usr_alice", "from_currency": "USD", "to_currency": "EUR", "from_amount": 10000},
+    )
+    assert q_res.status_code == 201
+    quote_id = q_res.get_json()["quote_id"]
+
+    results = []
+
+    def accept_call(i):
+        # We test with different idempotency keys to ensure quote locking is the gating mechanism
+        return client.post(
+            "/quotes/accept",
+            json={"quote_id": quote_id, "user_id": "usr_alice"},
+            headers={"Idempotency-Key": f"api-race-key-{i}"},
+        )
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
+        futures = [executor.submit(accept_call, i) for i in range(5)]
+        for f in concurrent.futures.as_completed(futures):
+            res = f.result()
+            results.append((res.status_code, res.get_json()))
+
+    # Exactly one request got 200 OK
+    status_codes = [r[0] for r in results]
+    assert status_codes.count(200) == 1
+    assert status_codes.count(422) == 4
+
+    # Verify transaction history has 5 legs
+    tx_res = client.get("/users/usr_alice/transactions")
+    assert tx_res.status_code == 200
+    txs = tx_res.get_json()["transactions"]
+    fx_tx = next(t for t in txs if t["type"] == "FX_CONVERSION")
+    assert len(fx_tx["legs"]) == 5
+    assert fx_tx["legs"][0]["currency"] == "USD"
+    assert fx_tx["legs"][1]["currency"] == "USD"
+    assert fx_tx["legs"][2]["currency"] == "EUR"
+    assert fx_tx["legs"][3]["currency"] == "EUR"
+    assert fx_tx["legs"][4]["currency"] == "EUR"
+
 
