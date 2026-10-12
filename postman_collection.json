@@ -1,0 +1,287 @@
+{
+  "info": {
+    "_postman_id": "a9e6d421-25c7-4bb9-923f-multi-curr-wallet",
+    "name": "Multi-Currency Wallet API",
+    "description": "Postman collection for developing and testing the Multi-Currency Wallet Service API endpoints.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:5001",
+      "type": "string"
+    },
+    {
+      "key": "userId",
+      "value": "usr_alice",
+      "type": "string"
+    },
+    {
+      "key": "recipientId",
+      "value": "usr_bob",
+      "type": "string"
+    },
+    {
+      "key": "quoteId",
+      "value": "qte_example_123",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "System & Diagnostics",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["health"]
+            },
+            "description": "Verify that the Flask server is running."
+          },
+          "response": []
+        },
+        {
+          "name": "Greeting (Template Example)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"Alice Smith\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/hello?salutation=Welcome",
+              "host": ["{{baseUrl}}"],
+              "path": ["hello"],
+              "query": [
+                {
+                  "key": "salutation",
+                  "value": "Welcome"
+                }
+              ]
+            },
+            "description": "Template example route verifying Service -> Manager -> Adapter flow."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Exchange Rates",
+      "item": [
+        {
+          "name": "Get Exchange Rates",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/rates",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "rates"]
+            },
+            "description": "Fetch the table of exchange rates."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Users & Balances",
+      "item": [
+        {
+          "name": "List Users",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/users",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "users"]
+            },
+            "description": "List seeded users in the wallet application."
+          },
+          "response": []
+        },
+        {
+          "name": "Get User Balances",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/users/{{userId}}/balances",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "users", "{{userId}}", "balances"]
+            },
+            "description": "Fetch all multi-currency balances for the specified user."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Quotes & Conversions",
+      "item": [
+        {
+          "name": "Request 30s Conversion Quote",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200 || pm.response.code === 201) {",
+                  "    var data = pm.response.json();",
+                  "    if (data.quote_id) {",
+                  "        pm.collectionVariables.set('quoteId', data.quote_id);",
+                  "        console.log('Saved quoteId to collection variable:', data.quote_id);",
+                  "    }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_id\": \"{{userId}}\",\n  \"from_currency\": \"USD\",\n  \"to_currency\": \"EUR\",\n  \"amount\": 100.00\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/quotes",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "quotes"]
+            },
+            "description": "Request a currency conversion quote valid for 30 seconds."
+          },
+          "response": []
+        },
+        {
+          "name": "Accept Quote (Execute Conversion)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "description": "Unique key to ensure idempotent execution."
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_id\": \"{{userId}}\",\n  \"idempotency_key\": \"{{$guid}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/quotes/{{quoteId}}/accept",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "quotes", "{{quoteId}}", "accept"]
+            },
+            "description": "Accept and execute an active quote within 30 seconds."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "P2P Transfers",
+      "item": [
+        {
+          "name": "Send Money (P2P Transfer)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "description": "Unique key to prevent duplicate transfers."
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sender_id\": \"{{userId}}\",\n  \"recipient_id\": \"{{recipientId}}\",\n  \"currency\": \"EUR\",\n  \"amount\": 25.50,\n  \"note\": \"Dinner split\",\n  \"idempotency_key\": \"{{$guid}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/transfers",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "transfers"]
+            },
+            "description": "Transfer funds to another user peer-to-peer."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Transaction History",
+      "item": [
+        {
+          "name": "Get User Transactions",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/users/{{userId}}/transactions?limit=20&offset=0",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "users", "{{userId}}", "transactions"],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                }
+              ]
+            },
+            "description": "Retrieve chronological ledger of user transactions (conversions, transfers sent, transfers received)."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
