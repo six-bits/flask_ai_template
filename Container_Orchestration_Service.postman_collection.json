@@ -1,0 +1,352 @@
+{
+  "info": {
+    "_postman_id": "b78b53d4-9d11-4fa3-9e45-728b1e4c9f1a",
+    "name": "Container Orchestration Service API",
+    "description": "Postman collection covering all endpoints, key scenarios, lifecycle operations, and edge cases for the In-Memory Container Orchestration Service.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:5001",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "General",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["health"]
+            },
+            "description": "Liveness check returning service status."
+          },
+          "response": []
+        },
+        {
+          "name": "Inspect Fleet",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/fleet",
+              "host": ["{{baseUrl}}"],
+              "path": ["fleet"]
+            },
+            "description": "Retrieves live resource utilization, total capacity, free capacity, and active containers for all machines (mA, mB, mC)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Scenario 1 - CPU-First Placement & Tie-Breaker",
+      "item": [
+        {
+          "name": "1. Deploy c1 (mA tie-break)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"c1\",\n  \"cpu\": 2,\n  \"memory_mb\": 2000,\n  \"criteria\": 0\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/containers",
+              "host": ["{{baseUrl}}"],
+              "path": ["containers"]
+            },
+            "description": "Criteria 0 (CPU-first). Both mA and mB have 8 free CPU. Lexicographical tie-breaker assigns c1 to mA."
+          },
+          "response": []
+        },
+        {
+          "name": "2. Deploy c2 (assigned to mB)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"c2\",\n  \"cpu\": 6,\n  \"memory_mb\": 1000,\n  \"criteria\": 0\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/containers",
+              "host": ["{{baseUrl}}"],
+              "path": ["containers"]
+            },
+            "description": "Criteria 0. mB has 8 free CPU while mA has 6 free CPU. Assigned to mB."
+          },
+          "response": []
+        },
+        {
+          "name": "3. Deploy c3 (assigned to mA)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"c3\",\n  \"cpu\": 3,\n  \"memory_mb\": 1000,\n  \"criteria\": 0\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/containers",
+              "host": ["{{baseUrl}}"],
+              "path": ["containers"]
+            },
+            "description": "Criteria 0. mA has 6 free CPU while mB has 2 free CPU. Assigned to mA."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Scenario 2 - Memory-First Placement & Rejection",
+      "item": [
+        {
+          "name": "1. Deploy c4 (assigned to mC)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"c4\",\n  \"cpu\": 2,\n  \"memory_mb\": 9000,\n  \"criteria\": 1\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/containers",
+              "host": ["{{baseUrl}}"],
+              "path": ["containers"]
+            },
+            "description": "Criteria 1 (Memory-first). mC has the most free memory (32000 MB). Assigned to mC."
+          },
+          "response": []
+        },
+        {
+          "name": "2. Deploy c5 (Expect 422 - Rejection)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"c5\",\n  \"cpu\": 2,\n  \"memory_mb\": 25000,\n  \"criteria\": 1\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/containers",
+              "host": ["{{baseUrl}}"],
+              "path": ["containers"]
+            },
+            "description": "Criteria 1. No machine has >= 25000 MB free memory. Request fails with 422 Unprocessable Entity."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Scenario 3 - Stop & Reclaim Flow",
+      "item": [
+        {
+          "name": "1. Stop Container c4",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/containers/c4/stop",
+              "host": ["{{baseUrl}}"],
+              "path": ["containers", "c4", "stop"]
+            },
+            "description": "Stops container c4 and immediately restores resources on mC (4 CPU, 32000 MB free)."
+          },
+          "response": []
+        },
+        {
+          "name": "2. Retry Deploy c5 (Now Succeeds on mC)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"c5\",\n  \"cpu\": 2,\n  \"memory_mb\": 25000,\n  \"criteria\": 1\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/containers",
+              "host": ["{{baseUrl}}"],
+              "path": ["containers"]
+            },
+            "description": "Now that c4 has released mC resources, deploying c5 succeeds on mC."
+          },
+          "response": []
+        },
+        {
+          "name": "3. Stop c4 Again (Expect 400 - Already Stopped)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/containers/c4/stop",
+              "host": ["{{baseUrl}}"],
+              "path": ["containers", "c4", "stop"]
+            },
+            "description": "Attempts to stop c4 again. Fails with 400 Bad Request because it is already stopped."
+          },
+          "response": []
+        },
+        {
+          "name": "4. Stop Non-Existent Container (Expect 404)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/containers/non_existent_c99/stop",
+              "host": ["{{baseUrl}}"],
+              "path": ["containers", "non_existent_c99", "stop"]
+            },
+            "description": "Attempts to stop an unknown container. Returns 404 Not Found."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Inspect Containers",
+      "item": [
+        {
+          "name": "Inspect Container c1",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/containers/c1",
+              "host": ["{{baseUrl}}"],
+              "path": ["containers", "c1"]
+            },
+            "description": "Fetches status, resource requirements, and host machine of container c1."
+          },
+          "response": []
+        },
+        {
+          "name": "Inspect Non-Existent Container (Expect 404)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/containers/unknown_container",
+              "host": ["{{baseUrl}}"],
+              "path": ["containers", "unknown_container"]
+            },
+            "description": "Attempts to inspect an unregistered container. Returns 404 Not Found."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Validation & Conflict Errors",
+      "item": [
+        {
+          "name": "Duplicate Container Name (Expect 409 Conflict)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"c1\",\n  \"cpu\": 1,\n  \"memory_mb\": 1000,\n  \"criteria\": 0\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/containers",
+              "host": ["{{baseUrl}}"],
+              "path": ["containers"]
+            },
+            "description": "Attempts to schedule a container with a name that already exists. Returns 409 Conflict."
+          },
+          "response": []
+        },
+        {
+          "name": "Invalid CPU (Expect 400 Bad Request)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"c_invalid\",\n  \"cpu\": 0,\n  \"memory_mb\": 1000,\n  \"criteria\": 0\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/containers",
+              "host": ["{{baseUrl}}"],
+              "path": ["containers"]
+            },
+            "description": "Fails schema validation because CPU is <= 0. Returns 400 Bad Request."
+          },
+          "response": []
+        },
+        {
+          "name": "Invalid Criteria (Expect 400 Bad Request)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"name\": \"c_invalid\",\n  \"cpu\": 1,\n  \"memory_mb\": 1000,\n  \"criteria\": 5\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/containers",
+              "host": ["{{baseUrl}}"],
+              "path": ["containers"]
+            },
+            "description": "Fails schema validation because criteria must be 0 or 1. Returns 400 Bad Request."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
