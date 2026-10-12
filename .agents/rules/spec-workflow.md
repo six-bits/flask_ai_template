@@ -47,12 +47,12 @@ Each specification document MUST detail the relevant layered architecture (mark 
    - Dataclass entities exchanged between Service and Manager (e.g. `CommentRequestEntity`, `CommentResponseEntity`).
 4. **Manager Layer (`app/manager/`)**:
    - Business logic coordination.
-   - Follow the **one function per class** pattern.
+   - Group functionality in as few manager classes as possible.
 5. **Manager &harr; Adapter Contract (`app/adapter/entities.py`)**:
    - Dataclass entities exchanged between Manager and Adapter (e.g. `CommentRecordEntity`).
 6. **Adapter Layer (`app/adapter/`)**:
    - In-memory persistence / external integration.
-   - Follow the **one function per class** pattern.
+   - Group functionality in as few adapter classes as possible.
 7. **Test Plan (`tests/`)**:
    - If single layer: Unit tests targeting the isolated layer using mocks/stubs for adjacent layers.
    - If full stack: Integration tests covering the entire Service &rarr; Manager &rarr; Adapter flow.

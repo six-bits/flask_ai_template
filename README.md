@@ -17,8 +17,8 @@ A minimalist Flask application template following the **Service &rarr; Manager &
 2. **Distinct Entity Contracts**:
    - **Service &harr; Manager Contract**: Defined in [`app/manager/entities.py`](app/manager/entities.py). The Service layer only talks to the Manager using these entities.
    - **Manager &harr; Adapter Contract**: Defined in [`app/adapter/entities.py`](app/adapter/entities.py). The Adapter layer only talks to the Manager using these entities.
-3. **Single Responsibility (One Function per Class)**:
-   - To keep boilerplate minimal and testing straightforward, each component class exposes **one focused function** per workflow.
+3. **Cohesive Component Grouping**:
+   - It is preferred to group functionality into as few manager classes as possible, and the same applies to adapter classes.
 
 ---
 
