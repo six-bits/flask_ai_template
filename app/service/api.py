@@ -1,4 +1,4 @@
-"""Flask API service layer handling HTTP requests and validation."""
+"""Flask API service layer handling HTTP requests, validation, and wiring to Manager layer."""
 
 from flask import Flask, jsonify, request
 from jsonschema import ValidationError, validate
@@ -10,6 +10,7 @@ from app.manager.entities import (
     ReversalRequestEntity,
 )
 from app.manager.greeting_manager import greeting_manager
+from app.manager.payment_manager import compute_request_hash, payment_manager
 from app.service.schema import (
     AUTHORIZATION_SCHEMA,
     CLEARING_SCHEMA,
@@ -29,7 +30,7 @@ def handle_validation_error(err):
 @app.errorhandler(NotImplementedError)
 def handle_not_implemented(err):
     """Format NotImplementedError response as HTTP 501."""
-    message = str(err) or "Manager layer deferred to Spec 002"
+    message = str(err) or "Endpoint not implemented"
     return jsonify({"error": "Not Implemented", "message": message}), 501
 
 
@@ -78,13 +79,19 @@ def create_authorization():
 
     validate(instance=data, schema=AUTHORIZATION_SCHEMA)
 
-    _request_entity = AuthorizationRequestEntity(
+    request_entity = AuthorizationRequestEntity(
         card_id=data["card_id"],
         amount=float(data["amount"]),
         merchant=data["merchant"],
         idempotency_key=idempotency_key,
     )
-    raise NotImplementedError("Manager layer deferred to Spec 002")
+    request_hash = compute_request_hash("POST", "/authorizations", data)
+
+    status_code, body, is_replayed = payment_manager.create_authorization(request_entity, request_hash)
+    response = jsonify(body)
+    if is_replayed:
+        response.headers["Idempotent-Replay"] = "true"
+    return response, status_code
 
 
 @app.route("/clearings", methods=["POST"])
@@ -100,14 +107,20 @@ def create_clearing():
 
     validate(instance=data, schema=CLEARING_SCHEMA)
 
-    _request_entity = ClearingRequestEntity(
+    request_entity = ClearingRequestEntity(
         card_id=data["card_id"],
         amount=float(data["amount"]),
         merchant=data["merchant"],
         authorization_id=data.get("authorization_id"),
         idempotency_key=idempotency_key,
     )
-    raise NotImplementedError("Manager layer deferred to Spec 002")
+    request_hash = compute_request_hash("POST", "/clearings", data)
+
+    status_code, body, is_replayed = payment_manager.create_clearing(request_entity, request_hash)
+    response = jsonify(body)
+    if is_replayed:
+        response.headers["Idempotent-Replay"] = "true"
+    return response, status_code
 
 
 @app.route("/authorizations/<authorization_id>/reversals", methods=["POST"])
@@ -123,27 +136,35 @@ def reverse_authorization(authorization_id: str):
 
     validate(instance=data, schema=REVERSAL_SCHEMA)
 
-    _request_entity = ReversalRequestEntity(
+    request_entity = ReversalRequestEntity(
         card_id=data["card_id"],
         authorization_id=authorization_id,
         amount=float(data["amount"]) if data.get("amount") is not None else None,
         idempotency_key=idempotency_key,
     )
-    raise NotImplementedError("Manager layer deferred to Spec 002")
+    path = f"/authorizations/{authorization_id}/reversals"
+    request_hash = compute_request_hash("POST", path, data)
+
+    status_code, body, is_replayed = payment_manager.reverse_authorization(request_entity, request_hash)
+    response = jsonify(body)
+    if is_replayed:
+        response.headers["Idempotent-Replay"] = "true"
+    return response, status_code
 
 
 @app.route("/cards/<card_id>/balance", methods=["GET"])
 def get_card_balance(card_id: str):
     """Retrieve card balances and available credit limit."""
-    raise NotImplementedError("Manager layer deferred to Spec 002")
+    status_code, body = payment_manager.get_card_balance(card_id)
+    return jsonify(body), status_code
 
 
 @app.route("/cards/<card_id>/transactions", methods=["GET"])
 def get_card_transactions(card_id: str):
     """Retrieve card transaction history ledger."""
-    raise NotImplementedError("Manager layer deferred to Spec 002")
+    status_code, body = payment_manager.get_card_transactions(card_id)
+    return jsonify(body), status_code
 
 
 if __name__ == "__main__":
     app.run(port=5001, debug=True)
-

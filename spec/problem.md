@@ -10,9 +10,22 @@ The service handles the full payment lifecycle:
    - **Force-posts**: Clearing requests arriving without prior authorization must be accepted even if exceeding card credit limit.
 3. **Reversals**: Authorizations can be cancelled early, releasing remaining hold balance.
 4. **Card Inquiry & History**: Users can view credit limit, settled balance, held balance, available remaining limit, and full transaction history.
-5. **Seed Cards**: Initial cards and credit limits available on startup.
+5. **Seed Cards & Merchants**:
+   - Initial cards with limits (e.g., `card_seed_1`: $1000, `card_seed_2`: $500, `card_seed_3`: $2000).
+   - Seed merchants (e.g., `Amazon`, `Restaurant`, `Target`, `Starbucks`, `Airline Offline`). Transactions must validate against seeded merchants.
 
-## 2. Core Concepts & Math
+## 2. In-Memory Database & Concurrency Model
+- **Central Storage (`app/adapter/db.py`)**: Stores cards, authorizations, clearings, reversals, ledger transactions, and idempotency records.
+- **Granular Locking & Deadlock Prevention**:
+  - Lock at the most granular level (per-card and per-authorization locks).
+  - Strict lock acquisition order (e.g., `Card` lock acquired before `Authorization` lock) to prevent deadlocks under concurrent requests.
+  - Collection-level synchronization to protect concurrent mutations of collections holding objects.
+- **Idempotency Entity & Deterministic Hashing**:
+  - `IdempotencyRecordEntity` tracking `(idempotency_key, card_id, request_hash, status_code, response_body)`.
+  - Request hash calculated deterministically via SHA-256 over canonical HTTP method, path, and sorted JSON body.
+  - Matching hash returns cached response (no-op). Mismatched payload with same key returns conflict.
+
+## 3. Core Concepts & Math
 - **Credit Limit**: Total credit line assigned to a card.
 - **Settled Balance**: Sum of all captured/cleared transactions.
 - **Held Balance**: Sum of all active, unexpired, and unreversed hold amounts.
