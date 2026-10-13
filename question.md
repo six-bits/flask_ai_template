@@ -1,0 +1,11 @@
+  ## Problem 1: Card Authorization and Multi-Clearing Core                                                                                                                                                          
+                                                                                                                                                                                                                 
+  We're building an in-memory card issuing payment service. Each user has a card with a set credit limit. When a customer makes a purchase, we first receive an authorization request that places a temporary    
+  hold on their available limit. That hold is valid for 60 seconds. Later on, the merchant sends clearing requests to actually settle and capture the money.                                                     
+                                                                                                                                                                                                                 
+  A merchant can clear an authorization in multiple partial amounts over time (like Amazon shipping items in separate boxes), capture slightly more than the authorized amount (like adding a tip at a           
+  restaurant), or cancel the hold early with a reversal. The system also needs to handle force-posts, which are clearing requests that arrive with no prior authorization and must be accepted even if they push 
+  the card over its limit.                                                                                                                                                                                       
+                                                                                                                                                                                                                 
+  Users can view their credit limit, settled balance, held balance, available remaining limit, and transaction history. You'll get a few seed cards and limits to start from. Before writing any code, walk us   
+  through how you'd break this down, the API you'd build, and the data model underneath it.

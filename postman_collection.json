@@ -1,0 +1,323 @@
+{
+  "info": {
+    "_postman_id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+    "name": "Card Authorization & Multi-Clearing Service",
+    "description": "Postman collection to test the Card Authorization, Multi-Clearing, Force-Post, Reversal, Balance, and Transaction history APIs.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://127.0.0.1:5001",
+      "type": "string"
+    },
+    {
+      "key": "card_id",
+      "value": "card_seed_1",
+      "type": "string"
+    },
+    {
+      "key": "auth_id",
+      "value": "auth_101",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "0. Health",
+      "item": [
+        {
+          "name": "Health Check",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/health",
+              "host": ["{{base_url}}"],
+              "path": ["health"]
+            },
+            "description": "Verify that the service is running and healthy."
+          }
+        }
+      ]
+    },
+    {
+      "name": "1. Authorizations",
+      "item": [
+        {
+          "name": "Create Authorization (Valid)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "description": "Unique key to ensure idempotent retries"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"card_id\": \"{{card_id}}\",\n  \"amount\": 100.00,\n  \"merchant\": \"Amazon\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/authorizations",
+              "host": ["{{base_url}}"],
+              "path": ["authorizations"]
+            },
+            "description": "Places a temporary hold on the available limit for 60 seconds."
+          }
+        },
+        {
+          "name": "Create Authorization (Idempotent Retry)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "static-idempotency-key-001",
+                "description": "Fixed idempotency key to test replay behavior"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"card_id\": \"{{card_id}}\",\n  \"amount\": 100.00,\n  \"merchant\": \"Amazon\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/authorizations",
+              "host": ["{{base_url}}"],
+              "path": ["authorizations"]
+            },
+            "description": "Resending with the same Idempotency-Key should return cached response with no-op."
+          }
+        },
+        {
+          "name": "Create Authorization - Missing Idempotency Key (Expect 400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"card_id\": \"{{card_id}}\",\n  \"amount\": 100.00,\n  \"merchant\": \"Amazon\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/authorizations",
+              "host": ["{{base_url}}"],
+              "path": ["authorizations"]
+            },
+            "description": "Validates that mutating requests without Idempotency-Key header are rejected with 400."
+          }
+        },
+        {
+          "name": "Create Authorization - Invalid Body (Expect 400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"card_id\": \"{{card_id}}\",\n  \"amount\": -25.00\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/authorizations",
+              "host": ["{{base_url}}"],
+              "path": ["authorizations"]
+            },
+            "description": "Validates that negative amounts or missing required fields return 400 schema validation error."
+          }
+        }
+      ]
+    },
+    {
+      "name": "2. Clearings",
+      "item": [
+        {
+          "name": "Clear Authorization (Partial / Standard)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"card_id\": \"{{card_id}}\",\n  \"amount\": 40.00,\n  \"merchant\": \"Amazon\",\n  \"authorization_id\": \"{{auth_id}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/clearings",
+              "host": ["{{base_url}}"],
+              "path": ["clearings"]
+            },
+            "description": "Settles part of an authorization (e.g. shipping 1 box). Reduces held balance and increases settled balance."
+          }
+        },
+        {
+          "name": "Clear Authorization (Over-capture / Tip)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"card_id\": \"{{card_id}}\",\n  \"amount\": 120.00,\n  \"merchant\": \"Restaurant\",\n  \"authorization_id\": \"{{auth_id}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/clearings",
+              "host": ["{{base_url}}"],
+              "path": ["clearings"]
+            },
+            "description": "Captures slightly more than the authorized amount (e.g. adding tip)."
+          }
+        },
+        {
+          "name": "Force-Post Clearing (No Prior Auth)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"card_id\": \"{{card_id}}\",\n  \"amount\": 250.00,\n  \"merchant\": \"Airline Offline\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/clearings",
+              "host": ["{{base_url}}"],
+              "path": ["clearings"]
+            },
+            "description": "Clearing that arrives with no prior authorization. Must be accepted even if pushing card over limit."
+          }
+        }
+      ]
+    },
+    {
+      "name": "3. Reversals",
+      "item": [
+        {
+          "name": "Reverse Authorization (Full Remaining Hold)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"card_id\": \"{{card_id}}\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/authorizations/{{auth_id}}/reversals",
+              "host": ["{{base_url}}"],
+              "path": ["authorizations", "{{auth_id}}", "reversals"]
+            },
+            "description": "Cancels whatever remaining held balance is left on the authorization early."
+          }
+        },
+        {
+          "name": "Reverse Authorization (Partial Amount)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"card_id\": \"{{card_id}}\",\n  \"amount\": 30.00\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/authorizations/{{auth_id}}/reversals",
+              "host": ["{{base_url}}"],
+              "path": ["authorizations", "{{auth_id}}", "reversals"]
+            },
+            "description": "Partially reverses a specified portion of the remaining held amount."
+          }
+        }
+      ]
+    },
+    {
+      "name": "4. Cards & Inquiries",
+      "item": [
+        {
+          "name": "Get Card Balance",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/cards/{{card_id}}/balance",
+              "host": ["{{base_url}}"],
+              "path": ["cards", "{{card_id}}", "balance"]
+            },
+            "description": "Retrieve credit limit, settled balance, held balance, and available remaining limit."
+          }
+        },
+        {
+          "name": "Get Card Transactions",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/cards/{{card_id}}/transactions",
+              "host": ["{{base_url}}"],
+              "path": ["cards", "{{card_id}}", "transactions"]
+            },
+            "description": "Retrieve full transaction ledger history for the card."
+          }
+        }
+      ]
+    }
+  ]
+}

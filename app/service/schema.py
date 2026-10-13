@@ -13,3 +13,37 @@ GREETING_SCHEMA = {
     ],
     "additionalProperties": False,
 }
+
+AUTHORIZATION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "card_id": {"type": "string", "minLength": 1},
+        "amount": {"type": "number", "exclusiveMinimum": 0},
+        "merchant": {"type": "string", "minLength": 1},
+    },
+    "required": ["card_id", "amount", "merchant"],
+    "additionalProperties": False,
+}
+
+CLEARING_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "card_id": {"type": "string", "minLength": 1},
+        "amount": {"type": "number", "exclusiveMinimum": 0},
+        "merchant": {"type": "string", "minLength": 1},
+        "authorization_id": {"type": "string", "minLength": 1},
+    },
+    "required": ["card_id", "amount", "merchant"],
+    "additionalProperties": False,
+}
+
+REVERSAL_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "card_id": {"type": "string", "minLength": 1},
+        "amount": {"type": "number", "exclusiveMinimum": 0},
+    },
+    "required": ["card_id"],
+    "additionalProperties": False,
+}
+
