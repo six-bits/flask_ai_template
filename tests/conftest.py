@@ -1,13 +1,14 @@
-"""Pytest fixtures for the greeting API."""
+"""Pytest fixtures for the Flash Sale Inventory Reservation API."""
 
 import pytest
-from app.adapter.greeting_adapter import greeting_adapter
+
+from app.adapter.db import in_memory_db
 from app.service.api import app
 
 
 @pytest.fixture
 def client():
+    """Create Flask test client and reset in-memory database before each test."""
     app.config["TESTING"] = True
-    greeting_adapter.storage.clear()
-    with app.test_client() as client:
-        yield client
+    in_memory_db.reset()
+    return app.test_client()

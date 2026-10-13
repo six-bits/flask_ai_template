@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "a9b7f583-02e4-4a47-a81d-fc38b320d39e",
     "name": "Flash Sale Inventory Reservation Service",
-    "description": "Postman collection for High-Demand Flash Sale Inventory Reservation Engine.\nSupports item inventory checks, temporary 30-second reservation leases, checkout confirmation, and lease cancellations.",
+    "description": "Postman collection for High-Demand Flash Sale Inventory Reservation Engine.\nSupports item inventory checks, temporary 30-second reservation leases, checkout confirmation, lease cancellations, and user profile queries.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -45,6 +45,48 @@
         "description": "Service liveness check."
       },
       "response": []
+    },
+    {
+      "name": "Users",
+      "item": [
+        {
+          "name": "List All Users",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/users",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "users"
+              ]
+            },
+            "description": "Retrieve all pre-seeded registered users."
+          },
+          "response": []
+        },
+        {
+          "name": "Get User by ID",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/users/{{user_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "users",
+                "{{user_id}}"
+              ]
+            },
+            "description": "Retrieve user profile details for a specific user ID."
+          },
+          "response": []
+        }
+      ]
     },
     {
       "name": "Items",

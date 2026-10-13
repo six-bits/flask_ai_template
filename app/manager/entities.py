@@ -35,6 +35,24 @@ class GreetingResponseEntity:
 
 
 # ---------------------------------------------------------------------------
+# User Contracts (Service <-> Manager)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class UserResponseEntity:
+    """Response representation of a registered or seeded user."""
+    user_id: str
+    name: str
+    email: str
+    created_at: float
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert entity to a dictionary for JSON serialization."""
+        return asdict(self)
+
+
+# ---------------------------------------------------------------------------
 # Flash Sale Inventory Reservation Contracts (Service <-> Manager)
 # ---------------------------------------------------------------------------
 
