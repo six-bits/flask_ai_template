@@ -218,15 +218,40 @@ class WalletAdapter:
                 return self._to_transaction_entity(txn_record)
 
             except Exception as exc:
-                # Compensating rollback: reverse executed steps in reverse order
+                # Compensating rollback: create new compensating step events in reverse order
                 with self.db.lock:
-                    for step in reversed(executed_step_records):
-                        from_acc = self.db.accounts.get(step.from_account_id)
-                        to_acc = self.db.accounts.get(step.to_account_id)
-                        if to_acc and from_acc:
-                            to_acc.balance -= step.amount
-                            from_acc.balance += step.amount
-                        step.status = "REVERSED"
+                    compensating_step_records: List[MovementStepRecord] = []
+                    next_step_index = len(executed_step_records) + 1
+
+                    for forward_step in reversed(executed_step_records):
+                        comp_from = forward_step.to_account_id
+                        comp_to = forward_step.from_account_id
+                        amt = forward_step.amount
+                        curr = forward_step.currency
+
+                        from_acc = self.db.accounts.get(comp_from)
+                        to_acc = self.db.accounts.get(comp_to)
+                        if from_acc and to_acc:
+                            from_acc.balance -= amt
+                            to_acc.balance += amt
+
+                        comp_step = MovementStepRecord(
+                            step_id=f"step_comp_{uuid.uuid4().hex[:12]}",
+                            transaction_id=transaction_id,
+                            step_index=next_step_index,
+                            from_account_id=comp_from,
+                            to_account_id=comp_to,
+                            currency=curr,
+                            amount=amt,
+                            status="COMPENSATING",
+                            timestamp=datetime.utcnow(),
+                            is_compensating=True,
+                        )
+                        compensating_step_records.append(comp_step)
+                        self.db.movement_steps[comp_step.step_id] = comp_step
+                        next_step_index += 1
+
+                    all_steps = executed_step_records + compensating_step_records
 
                     # Record transaction as FAILED / REVERSED
                     txn_record = TransactionRecord(
@@ -235,7 +260,7 @@ class WalletAdapter:
                         initiator_user_id=initiator_user_id,
                         status="REVERSED",
                         metadata=metadata,
-                        steps=executed_step_records,
+                        steps=all_steps,
                         idempotency_key=idempotency_key,
                         timestamp=datetime.utcnow(),
                     )
@@ -298,6 +323,7 @@ class WalletAdapter:
                     currency=s.currency,
                     amount=s.amount,
                     status=s.status,
+                    is_compensating=s.is_compensating,
                     timestamp=s.timestamp,
                 )
                 for s in t.steps

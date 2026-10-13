@@ -57,8 +57,9 @@ class MovementStepRecord:
     to_account_id: str
     currency: str
     amount: Decimal
-    status: str  # "COMPLETED", "REVERSED", "FAILED"
+    status: str  # "COMPLETED", "REVERSED", "FAILED", "COMPENSATING"
     timestamp: datetime = field(default_factory=datetime.utcnow)
+    is_compensating: bool = False
 
 
 @dataclass

@@ -194,6 +194,12 @@
                 "key": "Idempotency-Key",
                 "value": "{{$guid}}",
                 "description": "Unique key to ensure idempotent execution."
+              },
+              {
+                "key": "X-Simulate-Failure-At-Step",
+                "value": "2",
+                "disabled": true,
+                "description": "Optional: Enable and set to 1, 2, or 3 to simulate midway failure and verify rollback."
               }
             ],
             "body": {
@@ -232,6 +238,12 @@
                 "key": "Idempotency-Key",
                 "value": "{{$guid}}",
                 "description": "Unique key to prevent duplicate transfers."
+              },
+              {
+                "key": "X-Simulate-Failure-At-Step",
+                "value": "2",
+                "disabled": true,
+                "description": "Optional: Enable and set to 1, 2, or 3 to simulate midway failure and verify rollback."
               }
             ],
             "body": {
@@ -278,6 +290,116 @@
               ]
             },
             "description": "Retrieve chronological ledger of user transactions (conversions, transfers sent, transfers received)."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Rollback & Failure Injection Tests",
+      "item": [
+        {
+          "name": "Simulate Failure at Step 2 (P2P Transfer Rollback)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 500 Internal Server Error\", function () {",
+                  "    pm.response.to.have.status(500);",
+                  "});",
+                  "pm.test(\"Error message indicates simulated failure at Step 2\", function () {",
+                  "    var data = pm.response.json();",
+                  "    pm.expect(data.message).to.include(\"Simulated failure at step 2\");",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}",
+                "description": "Unique key."
+              },
+              {
+                "key": "X-Simulate-Failure-At-Step",
+                "value": "2",
+                "description": "Inject failure at Step 2 (Outbound Pool -> Inbound Pool) to trigger compensating rollback."
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"sender_id\": \"{{userId}}\",\n  \"recipient_id\": \"{{recipientId}}\",\n  \"currency\": \"EUR\",\n  \"amount\": 30.00,\n  \"note\": \"Testing rollback injection at Step 2\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/transfers",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "transfers"]
+            },
+            "description": "Inject failure at Step 2 during transfer execution to verify that Step 1 is cleanly reversed and balances remain untouched."
+          },
+          "response": []
+        },
+        {
+          "name": "Simulate Failure at Step 3 (Accept Quote Rollback)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 500 Internal Server Error\", function () {",
+                  "    pm.response.to.have.status(500);",
+                  "});",
+                  "pm.test(\"Error message indicates simulated failure at Step 3\", function () {",
+                  "    var data = pm.response.json();",
+                  "    pm.expect(data.message).to.include(\"Simulated failure at step 3\");",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "X-Simulate-Failure-At-Step",
+                "value": "3",
+                "description": "Inject failure at Step 3 (FX Pool -> User) to trigger compensating rollback of Step 1 & 2."
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_id\": \"{{userId}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/quotes/{{quoteId}}/accept",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "quotes", "{{quoteId}}", "accept"]
+            },
+            "description": "Inject failure at Step 3 during conversion execution to verify that steps 1 and 2 are reversed and balances remain unchanged."
           },
           "response": []
         }

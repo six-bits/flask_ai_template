@@ -1,5 +1,6 @@
 """Flask API service layer handling HTTP requests and validation."""
 
+from typing import Optional
 from flask import Flask, jsonify, request
 from jsonschema import ValidationError, validate
 
@@ -139,6 +140,16 @@ def create_quote():
     return jsonify(response_entity.to_dict()), 201
 
 
+def _extract_simulate_step() -> Optional[int]:
+    """Extract optional simulated step failure number from header or query param."""
+    raw = request.headers.get("X-Simulate-Failure-At-Step") or request.args.get("simulate_failure_at_step")
+    if raw:
+        cleaned = str(raw).strip()
+        if cleaned.isdigit():
+            return int(cleaned)
+    return None
+
+
 @app.route("/api/v1/quotes/<quote_id>/accept", methods=["POST"])
 def accept_quote(quote_id: str):
     """Accept and execute a quote using an optional idempotency key."""
@@ -150,12 +161,14 @@ def accept_quote(quote_id: str):
         idempotency_key = idempotency_key or data.get("idempotency_key")
         user_id = data.get("user_id")
 
+    simulate_step = _extract_simulate_step()
+
     request_entity = AcceptQuoteRequestEntity(
         quote_id=quote_id,
         user_id=user_id,
         idempotency_key=idempotency_key,
     )
-    response_entity = wallet_manager.accept_quote(request_entity)
+    response_entity = wallet_manager.accept_quote(request_entity, simulate_failure_at_step=simulate_step)
     return jsonify(response_entity.to_dict()), 200
 
 
@@ -170,6 +183,8 @@ def transfer_money():
     validate(instance=data, schema=TRANSFER_REQUEST_SCHEMA)
     idempotency_key = idempotency_key or data.get("idempotency_key")
 
+    simulate_step = _extract_simulate_step()
+
     request_entity = TransferRequestEntity(
         sender_id=data["sender_id"],
         recipient_id=data["recipient_id"],
@@ -178,7 +193,7 @@ def transfer_money():
         note=data.get("note", ""),
         idempotency_key=idempotency_key,
     )
-    response_entity = wallet_manager.transfer_money(request_entity)
+    response_entity = wallet_manager.transfer_money(request_entity, simulate_failure_at_step=simulate_step)
     return jsonify(response_entity.to_dict()), 201
 
 

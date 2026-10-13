@@ -109,6 +109,7 @@ class MovementStepRecordEntity:
     amount: Decimal
     status: str
     timestamp: datetime
+    is_compensating: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -120,6 +121,7 @@ class MovementStepRecordEntity:
             "currency": self.currency,
             "amount": float(self.amount),
             "status": self.status,
+            "is_compensating": self.is_compensating,
             "timestamp": self.timestamp.isoformat(),
         }
 

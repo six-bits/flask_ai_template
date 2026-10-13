@@ -59,7 +59,7 @@ Build a multi-currency wallet application backend. Each user holds balances acro
    - Every movement step must be individually recorded in an audit ledger with `step_id`, `transaction_id`, `step_index`, `from_account`, `to_account`, `currency`, `amount`, and `status`.
 
 2. **Midway Failure & Step Rollback**:
-   - If any step fails during transaction execution (e.g. balance check, unexpected failure), all previously completed steps in that transaction must be reversed immediately in reverse order via compensating entries.
+   - If any step fails during transaction execution (e.g. balance check, unexpected failure), all previously completed steps in that transaction must be reversed immediately in reverse order by creating **NEW compensating movement step events** (`from = previous to`, `to = previous from`, `status = "COMPENSATING"`). Prior executed steps remain immutable in the audit ledger.
    - The transaction status is marked as `FAILED` or `REVERSED`.
 
 3. **Fine-Grained Account-Level Locking**:

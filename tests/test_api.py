@@ -18,7 +18,9 @@ from app.manager.entities import (
 )
 from app.manager.greeting_manager import GreetingManager
 from app.manager.wallet_manager import wallet_manager
+from app.service.api import app
 from app.utils.exceptions import StepExecutionError
+
 
 
 # ---------------------------------------------------------
@@ -501,10 +503,11 @@ def test_get_user_transactions(client):
 
 
 def test_multi_step_rollback_on_midway_failure(client):
-    """Verify that if a multi-step transaction fails midway, all prior steps are reversed."""
+    """Verify that if a multi-step transaction fails midway, compensating step events are created in reverse order."""
     # Capture initial balances
     alice_initial_usd = db.accounts["user:usr_alice:USD"].balance
     outbound_initial = db.accounts["system:outbound_pool:USD"].balance
+    initial_step_count = len(db.movement_steps)
 
     # Attempt a transfer with simulated failure at Step 2
     req = TransferRequestEntity(
@@ -517,10 +520,105 @@ def test_multi_step_rollback_on_midway_failure(client):
     with pytest.raises(StepExecutionError):
         wallet_manager.transfer_money(req, simulate_failure_at_step=2)
 
-    # Step 1 should have been executed then REVERSED
-    # Verify balances were completely restored to initial values!
+    # Balances were completely restored to initial values
     assert db.accounts["user:usr_alice:USD"].balance == alice_initial_usd
     assert db.accounts["system:outbound_pool:USD"].balance == outbound_initial
+
+    # Find the reversed transaction
+    reversed_txns = [t for t in db.transactions.values() if t.status == "REVERSED" and t.type == "TRANSFER"]
+    assert len(reversed_txns) >= 1
+    txn = reversed_txns[-1]
+
+    # Exactly 2 step events recorded: 1 forward step + 1 compensating step event
+    assert len(txn.steps) == 2
+    forward_step = txn.steps[0]
+    comp_step = txn.steps[1]
+
+    # Forward step 1: Alice -> Outbound Pool (COMPLETED)
+    assert forward_step.from_account_id == "user:usr_alice:USD"
+    assert forward_step.to_account_id == "system:outbound_pool:USD"
+    assert forward_step.amount == Decimal("100.00")
+    assert forward_step.status == "COMPLETED"
+    assert forward_step.is_compensating is False
+
+    # Compensating step event: Outbound Pool -> Alice (COMPENSATING)
+    assert comp_step.from_account_id == "system:outbound_pool:USD"
+    assert comp_step.to_account_id == "user:usr_alice:USD"
+    assert comp_step.amount == Decimal("100.00")
+    assert comp_step.status == "COMPENSATING"
+    assert comp_step.is_compensating is True
+
+    # Both events persisted to global movement steps ledger
+    assert forward_step.step_id in db.movement_steps
+    assert comp_step.step_id in db.movement_steps
+    assert len(db.movement_steps) == initial_step_count + 2
+
+
+def test_multi_step_rollback_reverse_order_events(client):
+    """Verify that quote conversion failure at Step 3 creates compensating events for Step 2 then Step 1 in reverse order."""
+    alice_initial_usd = db.accounts["user:usr_alice:USD"].balance
+    alice_initial_eur = db.accounts["user:usr_alice:EUR"].balance
+    fee_initial_eur = db.accounts["system:fee_pool:EUR"].balance
+    fx_initial_usd = db.accounts["system:fx_pool:USD"].balance
+    fx_initial_eur = db.accounts["system:fx_pool:EUR"].balance
+
+    # 1. Create a quote: Alice converts 100 USD to EUR
+    q_res = client.post(
+        "/api/v1/quotes",
+        json={"user_id": "usr_alice", "from_currency": "USD", "to_currency": "EUR", "amount": 100.0},
+    )
+    assert q_res.status_code == 201
+    quote_id = q_res.get_json()["quote_id"]
+
+    # 2. Accept quote with simulated failure at Step 3 (Step 1 and Step 2 succeed, Step 3 fails)
+    accept_res = client.post(
+        f"/api/v1/quotes/{quote_id}/accept",
+        json={"user_id": "usr_alice"},
+        headers={"X-Simulate-Failure-At-Step": "3"},
+    )
+    assert accept_res.status_code == 500
+
+    # 3. Verify all account balances are restored to net zero change
+    assert db.accounts["user:usr_alice:USD"].balance == alice_initial_usd
+    assert db.accounts["user:usr_alice:EUR"].balance == alice_initial_eur
+    assert db.accounts["system:fee_pool:EUR"].balance == fee_initial_eur
+    assert db.accounts["system:fx_pool:USD"].balance == fx_initial_usd
+    assert db.accounts["system:fx_pool:EUR"].balance == fx_initial_eur
+
+    # 4. Inspect the recorded reversed transaction
+    reversed_txns = [t for t in db.transactions.values() if t.status == "REVERSED" and t.type == "CONVERSION"]
+    assert len(reversed_txns) >= 1
+    txn = reversed_txns[-1]
+
+    # Must contain 4 steps: 2 forward steps + 2 compensating steps in reverse order
+    assert len(txn.steps) == 4
+    f_step1, f_step2, c_step2, c_step1 = txn.steps
+
+    # Forward Step 1: Alice USD -> FX Pool USD
+    assert f_step1.from_account_id == "user:usr_alice:USD"
+    assert f_step1.to_account_id == "system:fx_pool:USD"
+    assert f_step1.status == "COMPLETED"
+    assert f_step1.is_compensating is False
+
+    # Forward Step 2: FX Pool EUR -> Fee Pool EUR
+    assert f_step2.from_account_id == "system:fx_pool:EUR"
+    assert f_step2.to_account_id == "system:fee_pool:EUR"
+    assert f_step2.status == "COMPLETED"
+    assert f_step2.is_compensating is False
+
+    # Compensating Step 1 (reverses Step 2 first): Fee Pool EUR -> FX Pool EUR
+    assert c_step2.from_account_id == "system:fee_pool:EUR"
+    assert c_step2.to_account_id == "system:fx_pool:EUR"
+    assert c_step2.status == "COMPENSATING"
+    assert c_step2.is_compensating is True
+    assert c_step2.amount == f_step2.amount
+
+    # Compensating Step 2 (reverses Step 1 second): FX Pool USD -> Alice USD
+    assert c_step1.from_account_id == "system:fx_pool:USD"
+    assert c_step1.to_account_id == "user:usr_alice:USD"
+    assert c_step1.status == "COMPENSATING"
+    assert c_step1.is_compensating is True
+    assert c_step1.amount == f_step1.amount
 
 
 def test_fine_grained_concurrency_locking(client):
@@ -568,3 +666,225 @@ def test_fine_grained_concurrency_locking(client):
     assert db.accounts["user:usr_alice:EUR"].balance == Decimal("480.00")
     # Alice USD should be 1000 + 30 = 1030
     assert db.accounts["user:usr_alice:USD"].balance == Decimal("1030.00")
+
+
+# ---------------------------------------------------------
+# Concurrency Correctness E2E Tests
+# ---------------------------------------------------------
+
+
+def test_concurrent_competing_transfers_overdraft_prevention(client):
+    """E2E Test 1: Competing transfers attempting to overdraw Alice must not both succeed."""
+    # Alice has 500 EUR initially; set balance to exactly 100 EUR
+    db.accounts["user:usr_alice:EUR"].balance = Decimal("100.00")
+
+    results = []
+
+    def make_transfer(recipient_id):
+        thread_client = app.test_client()
+        payload = {
+            "sender_id": "usr_alice",
+            "recipient_id": recipient_id,
+            "currency": "EUR",
+            "amount": 80.0,
+        }
+        res = thread_client.post("/api/v1/transfers", json=payload)
+        results.append(res.status_code)
+
+    t1 = threading.Thread(target=make_transfer, args=("usr_bob",))
+    t2 = threading.Thread(target=make_transfer, args=("usr_charlie",))
+
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    # Exactly one succeeded (201) and one failed (422)
+    assert sorted(results) == [201, 422]
+    # Balance must remain exactly 100 - 80 = 20 EUR
+    assert db.accounts["user:usr_alice:EUR"].balance == Decimal("20.00")
+
+
+def test_concurrent_quote_double_acceptance(client):
+    """E2E Test 2: Concurrent requests accepting the same quote cannot double-convert."""
+    q_res = client.post(
+        "/api/v1/quotes",
+        json={"user_id": "usr_alice", "from_currency": "USD", "to_currency": "EUR", "amount": 100.0},
+    )
+    quote_id = q_res.get_json()["quote_id"]
+
+    results = []
+
+    def accept():
+        thread_client = app.test_client()
+        res = thread_client.post(f"/api/v1/quotes/{quote_id}/accept", json={"user_id": "usr_alice"})
+        results.append(res.status_code)
+
+    t1 = threading.Thread(target=accept)
+    t2 = threading.Thread(target=accept)
+
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    # Exactly one must succeed (200) and one must be rejected (422 Quote already accepted)
+    assert sorted(results) == [200, 422]
+    # Alice USD balance deducted exactly once: 1000 - 100 = 900 USD
+    assert db.accounts["user:usr_alice:USD"].balance == Decimal("900.00")
+
+
+def test_concurrent_simultaneous_duplicate_idempotency_keys(client):
+    """E2E Test 3: Multiple concurrent requests with the identical Idempotency-Key execute once."""
+    idem_key = "concurrent-idem-key-777"
+    payload = {
+        "sender_id": "usr_alice",
+        "recipient_id": "usr_bob",
+        "currency": "EUR",
+        "amount": 50.0,
+    }
+    results = []
+    transfer_ids = []
+
+    def send_transfer():
+        thread_client = app.test_client()
+        res = thread_client.post("/api/v1/transfers", json=payload, headers={"Idempotency-Key": idem_key})
+        results.append(res.status_code)
+        if res.status_code == 201:
+            transfer_ids.append(res.get_json()["transfer_id"])
+
+    threads = [threading.Thread(target=send_transfer) for _ in range(5)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    # All 5 requests returned 201 with the exact same transfer_id
+    assert results == [201, 201, 201, 201, 201]
+    assert len(set(transfer_ids)) == 1
+
+    # Alice EUR balance deducted only once: 500 - 50 = 450 EUR
+    assert db.accounts["user:usr_alice:EUR"].balance == Decimal("450.00")
+
+
+def test_concurrent_bidirectional_transfers_deadlock_freedom(client):
+    """E2E Test 4: Mutual concurrent transfers between counterparties never deadlock."""
+    # Alice has 500 EUR, Bob has 750 EUR
+    errors = []
+
+    def alice_to_bob():
+        thread_client = app.test_client()
+        res = thread_client.post(
+            "/api/v1/transfers",
+            json={"sender_id": "usr_alice", "recipient_id": "usr_bob", "currency": "EUR", "amount": 10.0},
+        )
+        if res.status_code != 201:
+            errors.append(res.get_json())
+
+    def bob_to_alice():
+        thread_client = app.test_client()
+        res = thread_client.post(
+            "/api/v1/transfers",
+            json={"sender_id": "usr_bob", "recipient_id": "usr_alice", "currency": "EUR", "amount": 10.0},
+        )
+        if res.status_code != 201:
+            errors.append(res.get_json())
+
+    threads = []
+    for _ in range(10):
+        threads.append(threading.Thread(target=alice_to_bob))
+        threads.append(threading.Thread(target=bob_to_alice))
+
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert len(errors) == 0
+    # 10 transfers each way net out to 0 balance change
+    assert db.accounts["user:usr_alice:EUR"].balance == Decimal("500.00")
+    assert db.accounts["user:usr_bob:EUR"].balance == Decimal("750.00")
+
+
+def test_concurrent_fan_in_transfers(client):
+    """E2E Test 5: Multiple concurrent senders transferring to the same recipient."""
+    statuses = []
+
+    def alice_sends():
+        thread_client = app.test_client()
+        res = thread_client.post(
+            "/api/v1/transfers",
+            json={"sender_id": "usr_alice", "recipient_id": "usr_charlie", "currency": "USD", "amount": 10.0},
+        )
+        statuses.append(res.status_code)
+
+    def bob_sends():
+        thread_client = app.test_client()
+        res = thread_client.post(
+            "/api/v1/transfers",
+            json={"sender_id": "usr_bob", "recipient_id": "usr_charlie", "currency": "GBP", "amount": 5.0},
+        )
+        statuses.append(res.status_code)
+
+    threads = []
+    for _ in range(5):
+        threads.append(threading.Thread(target=alice_sends))
+        threads.append(threading.Thread(target=bob_sends))
+
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert all(s == 201 for s in statuses)
+    # Charlie USD: initial 300 + (5 * 10) = 350
+    assert db.accounts["user:usr_charlie:USD"].balance == Decimal("350.00")
+    # Charlie GBP: initial 0 + (5 * 5) = 25
+    assert db.accounts["user:usr_charlie:GBP"].balance == Decimal("25.00")
+
+
+def test_concurrent_multi_step_failure_rollback_under_load(client):
+    """E2E Test 6: In-flight step failure rollback executes cleanly while concurrent transfers run."""
+    statuses = []
+
+    def failing_transfer():
+        thread_client = app.test_client()
+        # Uses Approach 1 header hook to trigger rollback at Step 2
+        res = thread_client.post(
+            "/api/v1/transfers",
+            json={"sender_id": "usr_alice", "recipient_id": "usr_bob", "currency": "EUR", "amount": 50.0},
+            headers={"X-Simulate-Failure-At-Step": "2"},
+        )
+        statuses.append(("failing", res.status_code))
+
+    def successful_transfer():
+        thread_client = app.test_client()
+        # Charlie sends 20 USD to Alice concurrently
+        res = thread_client.post(
+            "/api/v1/transfers",
+            json={"sender_id": "usr_charlie", "recipient_id": "usr_alice", "currency": "USD", "amount": 20.0},
+        )
+        statuses.append(("successful", res.status_code))
+
+    t1 = threading.Thread(target=failing_transfer)
+    t2 = threading.Thread(target=successful_transfer)
+
+    t1.start()
+    t2.start()
+    t1.join()
+    t2.join()
+
+    status_dict = dict(statuses)
+    # Failing transfer returned 500
+    assert status_dict["failing"] == 500
+    # Successful transfer returned 201
+    assert status_dict["successful"] == 201
+
+    # Alice EUR must be completely restored by rollback to initial 500.00 EUR
+    assert db.accounts["user:usr_alice:EUR"].balance == Decimal("500.00")
+    # Clearing pool must be clean
+    assert db.accounts["system:outbound_pool:EUR"].balance == Decimal("0.00")
+    # Successful transfer was properly credited to Alice USD: 1000 + 20 = 1020 USD
+    assert db.accounts["user:usr_alice:USD"].balance == Decimal("1020.00")
+
+
