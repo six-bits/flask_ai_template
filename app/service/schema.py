@@ -1,15 +1,48 @@
 """JSON Schemas for API request validation."""
 
-# JSON Schema: validates that the body contains the user's name as a non-empty string
-GREETING_SCHEMA = {
+# Schema for creating a 30-second inventory reservation lease
+CREATE_RESERVATION_SCHEMA = {
     "type": "object",
     "properties": {
-        "name": {"type": "string", "minLength": 1},
-        "full_name": {"type": "string", "minLength": 1},
+        "item_id": {
+            "type": "string",
+            "minLength": 1,
+        },
+        "user_id": {
+            "type": "string",
+            "minLength": 1,
+        },
+        "quantity": {
+            "type": "integer",
+            "minimum": 1,
+        },
     },
-    "anyOf": [
-        {"required": ["name"]},
-        {"required": ["full_name"]},
-    ],
+    "required": ["item_id", "user_id", "quantity"],
+    "additionalProperties": False,
+}
+
+# Schema for confirming a reservation checkout
+CONFIRM_RESERVATION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "user_id": {
+            "type": "string",
+            "minLength": 1,
+        },
+    },
+    "required": ["user_id"],
+    "additionalProperties": False,
+}
+
+# Schema for explicitly cancelling a reservation lease
+CANCEL_RESERVATION_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "user_id": {
+            "type": "string",
+            "minLength": 1,
+        },
+    },
+    "required": ["user_id"],
     "additionalProperties": False,
 }

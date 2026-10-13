@@ -1,0 +1,197 @@
+{
+  "info": {
+    "_postman_id": "a9b7f583-02e4-4a47-a81d-fc38b320d39e",
+    "name": "Flash Sale Inventory Reservation Service",
+    "description": "Postman collection for High-Demand Flash Sale Inventory Reservation Engine.\nSupports item inventory checks, temporary 30-second reservation leases, checkout confirmation, and lease cancellations.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:5001",
+      "type": "string"
+    },
+    {
+      "key": "item_id",
+      "value": "item_vip_ticket",
+      "type": "string"
+    },
+    {
+      "key": "reservation_id",
+      "value": "res_example_001",
+      "type": "string"
+    },
+    {
+      "key": "user_id",
+      "value": "user_101",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/health",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "health"
+          ]
+        },
+        "description": "Service liveness check."
+      },
+      "response": []
+    },
+    {
+      "name": "Items",
+      "item": [
+        {
+          "name": "List All Items Stock",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/items",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "items"
+              ]
+            },
+            "description": "Retrieve live inventory stock breakdown for all catalog items."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Single Item Stock",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{base_url}}/items/{{item_id}}",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "items",
+                "{{item_id}}"
+              ]
+            },
+            "description": "Retrieve live inventory stock breakdown for a specific item."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Reservations",
+      "item": [
+        {
+          "name": "Create Reservation Lease (30s Hold)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"item_id\": \"{{item_id}}\",\n  \"user_id\": \"{{user_id}}\",\n  \"quantity\": 2\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/reservations",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "reservations"
+              ]
+            },
+            "description": "Request a 30-second reservation lease holding inventory."
+          },
+          "response": []
+        },
+        {
+          "name": "Confirm Reservation Checkout",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_id\": \"{{user_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/reservations/{{reservation_id}}/confirm",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "reservations",
+                "{{reservation_id}}",
+                "confirm"
+              ]
+            },
+            "description": "Confirm checkout for an active reservation lease within 30 seconds."
+          },
+          "response": []
+        },
+        {
+          "name": "Cancel Reservation Lease",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"user_id\": \"{{user_id}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "{{base_url}}/reservations/{{reservation_id}}/cancel",
+              "host": [
+                "{{base_url}}"
+              ],
+              "path": [
+                "reservations",
+                "{{reservation_id}}",
+                "cancel"
+              ]
+            },
+            "description": "Explicitly cancel an active reservation lease and release hold immediately."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
