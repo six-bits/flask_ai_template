@@ -56,8 +56,8 @@ class InMemoryDB:
             UserRecordEntity("user_owner", "Owner User", "owner@example.com", now),
             UserRecordEntity("user_intruder", "Intruder User", "intruder@example.com", now),
         ]
-        # Seed test buyers (buyer_0 to buyer_11, buyer_overflow)
-        for i in range(12):
+        # Seed test buyers (buyer_0 to buyer_49, buyer_overflow)
+        for i in range(50):
             default_users.append(
                 UserRecordEntity(f"buyer_{i}", f"Buyer {i}", f"buyer_{i}@example.com", now)
             )
