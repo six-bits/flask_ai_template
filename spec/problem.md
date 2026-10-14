@@ -24,6 +24,13 @@ The service handles the full payment lifecycle:
   - `IdempotencyRecordEntity` tracking `(idempotency_key, card_id, request_hash, status_code, response_body)`.
   - Request hash calculated deterministically via SHA-256 over canonical HTTP method, path, and sorted JSON body.
   - Matching hash returns cached response (no-op). Mismatched payload with same key returns conflict.
+- **Configurable Hold Expiration (Fast-Expiry Testing)**:
+  - Default hold duration is 60.0 seconds.
+  - Configurable TTL (e.g. 0.2s) to enable fast, deterministic concurrent expiry testing without sleep lag.
+- **Concurrency Invariants**:
+  - **Balance Conservation**: $\text{Available Limit} = \text{Credit Limit} - \text{Settled Balance} - \text{Active Held Balance}$ across all cards at all times.
+  - **Idempotent Singularity**: Concurrent bursts of duplicate keys must debit balance and record transactions exactly once.
+  - **Over-subscription Safety**: $N$ concurrent threads over-subscribing a card must never exceed the credit limit.
 
 ## 3. Core Concepts & Math
 - **Credit Limit**: Total credit line assigned to a card.

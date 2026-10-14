@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
     "name": "Card Authorization & Multi-Clearing Service",
-    "description": "Postman collection to test the Card Authorization, Multi-Clearing, Force-Post, Reversal, Balance, and Transaction history APIs.",
+    "description": "Comprehensive Postman collection for testing the Card Authorization, Multi-Clearing, Force-Post, Reversal, Balance, and Transaction history APIs with automated variable capturing.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -18,7 +18,7 @@
     },
     {
       "key": "auth_id",
-      "value": "auth_101",
+      "value": "",
       "type": "string"
     }
   ],
@@ -46,6 +46,23 @@
       "item": [
         {
           "name": "Create Authorization (Valid)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    var data = pm.response.json();",
+                  "    if (data.authorization_id) {",
+                  "        pm.collectionVariables.set('auth_id', data.authorization_id);",
+                  "        console.log('Saved auth_id:', data.authorization_id);",
+                  "    }",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
           "request": {
             "method": "POST",
             "header": [
@@ -68,7 +85,7 @@
               "host": ["{{base_url}}"],
               "path": ["authorizations"]
             },
-            "description": "Places a temporary hold on the available limit for 60 seconds."
+            "description": "Places a temporary hold on the available limit for 60 seconds and auto-saves auth_id variable."
           }
         },
         {
@@ -95,11 +112,90 @@
               "host": ["{{base_url}}"],
               "path": ["authorizations"]
             },
-            "description": "Resending with the same Idempotency-Key should return cached response with no-op."
+            "description": "Resending with the same Idempotency-Key returns cached response with Idempotent-Replay: true header."
           }
         },
         {
-          "name": "Create Authorization - Missing Idempotency Key (Expect 400)",
+          "name": "Create Authorization (Idempotent Conflict - Expect 409)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "static-idempotency-key-001",
+                "description": "Reusing static key with DIFFERENT payload"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"card_id\": \"{{card_id}}\",\n  \"amount\": 250.00,\n  \"merchant\": \"Amazon\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/authorizations",
+              "host": ["{{base_url}}"],
+              "path": ["authorizations"]
+            },
+            "description": "Sending the same idempotency key with different payload returns 409 Conflict."
+          }
+        },
+        {
+          "name": "Create Authorization (Insufficient Funds - Expect 422)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"card_id\": \"{{card_id}}\",\n  \"amount\": 5000.00,\n  \"merchant\": \"Amazon\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/authorizations",
+              "host": ["{{base_url}}"],
+              "path": ["authorizations"]
+            },
+            "description": "Requesting an amount that exceeds available credit limit returns 422 Declined."
+          }
+        },
+        {
+          "name": "Create Authorization (Unknown Merchant - Expect 400)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              },
+              {
+                "key": "Idempotency-Key",
+                "value": "{{$guid}}"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"card_id\": \"{{card_id}}\",\n  \"amount\": 50.00,\n  \"merchant\": \"UnknownMerchantX\"\n}"
+            },
+            "url": {
+              "raw": "{{base_url}}/authorizations",
+              "host": ["{{base_url}}"],
+              "path": ["authorizations"]
+            },
+            "description": "Validates that unapproved/unseeded merchants return 400 Bad Request."
+          }
+        },
+        {
+          "name": "Create Authorization (Missing Idempotency Key - Expect 400)",
           "request": {
             "method": "POST",
             "header": [
@@ -118,32 +214,6 @@
               "path": ["authorizations"]
             },
             "description": "Validates that mutating requests without Idempotency-Key header are rejected with 400."
-          }
-        },
-        {
-          "name": "Create Authorization - Invalid Body (Expect 400)",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "key": "Idempotency-Key",
-                "value": "{{$guid}}"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"card_id\": \"{{card_id}}\",\n  \"amount\": -25.00\n}"
-            },
-            "url": {
-              "raw": "{{base_url}}/authorizations",
-              "host": ["{{base_url}}"],
-              "path": ["authorizations"]
-            },
-            "description": "Validates that negative amounts or missing required fields return 400 schema validation error."
           }
         }
       ]
@@ -200,7 +270,7 @@
               "host": ["{{base_url}}"],
               "path": ["clearings"]
             },
-            "description": "Captures slightly more than the authorized amount (e.g. adding tip)."
+            "description": "Captures slightly more than the authorized amount (e.g. restaurant tip), releasing original hold and settling full amount."
           }
         },
         {

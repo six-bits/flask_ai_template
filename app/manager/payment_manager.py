@@ -3,6 +3,7 @@
 import datetime
 import hashlib
 import json
+import os
 import time
 import uuid
 from typing import Any, Dict, Optional, Tuple
@@ -32,8 +33,10 @@ def compute_request_hash(method: str, path: str, body: Optional[Dict[str, Any]])
 class PaymentManager:
     """Coordinates card authorization, clearing, reversal, and balance logic."""
 
-    def __init__(self, adapter: Optional[PaymentAdapter] = None):
+    def __init__(self, adapter: Optional[PaymentAdapter] = None, hold_ttl_seconds: float = 60.0):
         self.adapter = adapter or payment_adapter
+        self.hold_ttl_seconds = float(os.environ.get("HOLD_TTL_SECONDS", hold_ttl_seconds))
+
 
     def _format_iso(self, ts: float) -> str:
         return datetime.datetime.fromtimestamp(ts, datetime.timezone.utc).isoformat()
@@ -104,7 +107,7 @@ class PaymentManager:
 
             # Hold approved
             auth_id = f"auth_{uuid.uuid4().hex[:8]}"
-            expires_at = now + 60.0
+            expires_at = now + self.hold_ttl_seconds
             auth_record = AuthorizationRecordEntity(
                 authorization_id=auth_id,
                 card_id=req.card_id,
