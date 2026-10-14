@@ -1,5 +1,6 @@
 """Flask API service layer handling HTTP requests and validation for Food Delivery."""
 
+from typing import Optional
 from flask import Flask, jsonify, request
 from jsonschema import ValidationError, validate
 
@@ -10,6 +11,7 @@ from app.adapter.food_delivery_adapter import (
     InsufficientPortionsError,
     InvalidTransitionError,
     OrderNotFoundError,
+    UserNotFoundError,
 )
 from app.manager.entities import (
     AddToCartRequestEntity,
@@ -31,6 +33,31 @@ from app.service.schema import (
 app = Flask(__name__)
 
 
+# --- Helper to extract user_id ---
+
+
+def get_request_user_id() -> Optional[str]:
+    """Extract user_id from headers, query parameters, or JSON body."""
+    # 1. Primary: HTTP Header
+    user_id = request.headers.get("X-User-Id")
+    if user_id and user_id.strip():
+        return user_id.strip()
+
+    # 2. Query param
+    user_id = request.args.get("user_id")
+    if user_id and user_id.strip():
+        return user_id.strip()
+
+    # 3. JSON body
+    data = request.get_json(silent=True)
+    if isinstance(data, dict):
+        user_id = data.get("user_id")
+        if user_id and str(user_id).strip():
+            return str(user_id).strip()
+
+    return None
+
+
 # --- Error Handlers ---
 
 
@@ -38,6 +65,12 @@ app = Flask(__name__)
 def handle_validation_error(err: ValidationError):
     """Format JSON Schema validation error response."""
     return jsonify({"error": "Validation error", "message": err.message}), 400
+
+
+@app.errorhandler(UserNotFoundError)
+def handle_user_not_found(err: UserNotFoundError):
+    """Format user not found error response."""
+    return jsonify({"error": "Not Found", "message": str(err)}), 404
 
 
 @app.errorhandler(DishNotFoundError)
@@ -102,6 +135,16 @@ def greet():
     return jsonify(response_entity.to_dict()), 200
 
 
+# --- User Routes ---
+
+
+@app.route("/users", methods=["GET"])
+def list_users():
+    """List all pre-seeded users."""
+    users = food_delivery_manager.list_users()
+    return jsonify([u.to_dict() for u in users]), 200
+
+
 # --- Dish Routes ---
 
 
@@ -130,19 +173,39 @@ def create_or_seed_dish():
     return jsonify(dish.to_dict()), 201
 
 
-# --- Cart Routes ---
+# --- Per-User Cart Routes ---
 
 
 @app.route("/cart", methods=["GET"])
 def get_cart():
-    """Retrieve the single active shopping cart."""
-    cart = food_delivery_manager.get_cart()
+    """Retrieve the active cart for the requesting user."""
+    user_id = get_request_user_id()
+    if not user_id:
+        return (
+            jsonify({
+                "error": "Bad Request",
+                "message": "Missing required user identification via 'X-User-Id' header or 'user_id' parameter.",
+            }),
+            400,
+        )
+
+    cart = food_delivery_manager.get_cart(user_id)
     return jsonify(cart.to_dict()), 200
 
 
 @app.route("/cart/items", methods=["POST"])
 def add_to_cart():
-    """Add or increment items in the single active cart."""
+    """Add or increment items in the user's active cart."""
+    user_id = get_request_user_id()
+    if not user_id:
+        return (
+            jsonify({
+                "error": "Bad Request",
+                "message": "Missing required user identification via 'X-User-Id' header or 'user_id' parameter.",
+            }),
+            400,
+        )
+
     data = request.get_json(silent=True)
     if data is None:
         return jsonify({"error": "Request body must be valid JSON"}), 400
@@ -150,6 +213,7 @@ def add_to_cart():
     validate(instance=data, schema=ADD_CART_ITEM_SCHEMA)
 
     req_entity = AddToCartRequestEntity(
+        user_id=user_id,
         dish_id=data["dish_id"],
         units=data["units"],
     )
@@ -159,25 +223,51 @@ def add_to_cart():
 
 @app.route("/cart/items/<dish_id>", methods=["DELETE"])
 def remove_from_cart(dish_id: str):
-    """Remove or decrement items from the single active cart."""
+    """Remove or decrement items from the user's active cart."""
+    user_id = get_request_user_id()
+    if not user_id:
+        return (
+            jsonify({
+                "error": "Bad Request",
+                "message": "Missing required user identification via 'X-User-Id' header or 'user_id' parameter.",
+            }),
+            400,
+        )
+
     units_param = request.args.get("units")
     units = None
     if units_param is not None:
         try:
             units = int(units_param)
             if units <= 0:
-                return jsonify({"error": "Validation error", "message": "units query param must be >= 1"}), 400
+                return (
+                    jsonify({"error": "Validation error", "message": "units query param must be >= 1"}),
+                    400,
+                )
         except ValueError:
-            return jsonify({"error": "Validation error", "message": "units query param must be an integer"}), 400
+            return (
+                jsonify({"error": "Validation error", "message": "units query param must be an integer"}),
+                400,
+            )
 
-    cart = food_delivery_manager.remove_from_cart(dish_id, units=units)
+    cart = food_delivery_manager.remove_from_cart(user_id=user_id, dish_id=dish_id, units=units)
     return jsonify(cart.to_dict()), 200
 
 
 @app.route("/cart", methods=["DELETE"])
 def clear_cart():
-    """Clear all items from the active cart."""
-    cart = food_delivery_manager.clear_cart()
+    """Clear all items from the user's active cart."""
+    user_id = get_request_user_id()
+    if not user_id:
+        return (
+            jsonify({
+                "error": "Bad Request",
+                "message": "Missing required user identification via 'X-User-Id' header or 'user_id' parameter.",
+            }),
+            400,
+        )
+
+    cart = food_delivery_manager.clear_cart(user_id)
     return jsonify(cart.to_dict()), 200
 
 
@@ -186,7 +276,17 @@ def clear_cart():
 
 @app.route("/orders", methods=["POST"])
 def place_order():
-    """Place an order from the active cart using an idempotency key."""
+    """Place an order from the user's active cart using an idempotency key."""
+    user_id = get_request_user_id()
+    if not user_id:
+        return (
+            jsonify({
+                "error": "Bad Request",
+                "message": "Missing required user identification via 'X-User-Id' header or 'user_id' parameter.",
+            }),
+            400,
+        )
+
     idempotency_key = request.headers.get("Idempotency-Key")
 
     # If not in header, check JSON body
@@ -204,7 +304,10 @@ def place_order():
             400,
         )
 
-    req_entity = PlaceOrderRequestEntity(idempotency_key=idempotency_key.strip())
+    req_entity = PlaceOrderRequestEntity(
+        user_id=user_id,
+        idempotency_key=idempotency_key.strip(),
+    )
     order, is_replay = food_delivery_manager.place_order(req_entity)
 
     if is_replay:
@@ -219,8 +322,9 @@ def place_order():
 
 @app.route("/orders", methods=["GET"])
 def list_orders():
-    """List all placed orders."""
-    orders = food_delivery_manager.list_orders()
+    """List orders, optionally filtered by user_id."""
+    user_id = get_request_user_id()
+    orders = food_delivery_manager.list_orders(user_id=user_id)
     return jsonify([order.to_dict() for order in orders]), 200
 
 

@@ -1,4 +1,4 @@
-"""Manager layer handling business logic and orchestration for Food Delivery Service."""
+"""Manager layer handling business logic and orchestration for Food Delivery Service with per-user carts."""
 
 import hashlib
 import json
@@ -11,8 +11,10 @@ from app.adapter.food_delivery_adapter import (
     EmptyCartError,
     FoodDeliveryAdapter,
     IdempotencyConflictError,
+    InsufficientPortionsError,
     InvalidTransitionError,
     OrderNotFoundError,
+    UserNotFoundError,
     food_delivery_adapter,
 )
 from app.manager.entities import (
@@ -25,14 +27,25 @@ from app.manager.entities import (
     OrderStatus,
     OrderTransitionRequestEntity,
     PlaceOrderRequestEntity,
+    UserEntity,
 )
 
 
 class FoodDeliveryManager:
-    """Coordinates cart management, order placement, idempotency, and status transitions."""
+    """Coordinates cart management, order placement, idempotency, and status transitions per user."""
 
     def __init__(self, adapter: FoodDeliveryAdapter) -> None:
         self.adapter = adapter
+
+    def list_users(self) -> List[UserEntity]:
+        """Retrieve all pre-seeded users."""
+        users = self.adapter.list_users()
+        return [UserEntity(user_id=u.user_id, name=u.name) for u in users]
+
+    def get_user(self, user_id: str) -> Optional[UserEntity]:
+        """Retrieve a specific user by ID."""
+        user = self.adapter.get_user(user_id)
+        return UserEntity(user_id=user.user_id, name=user.name) if user else None
 
     def list_dishes(self) -> List[DishEntity]:
         """Retrieve all dishes with portion statistics."""
@@ -74,9 +87,9 @@ class FoodDeliveryManager:
             total_sold_portions=dish_record.total_sold_portions,
         )
 
-    def get_cart(self) -> CartResponseEntity:
-        """Retrieve the current active cart."""
-        cart_record = self.adapter.get_cart()
+    def get_cart(self, user_id: str) -> CartResponseEntity:
+        """Retrieve the active cart for a specific user."""
+        cart_record = self.adapter.get_cart(user_id)
         items = [
             CartItemEntity(
                 dish_id=item.dish_id,
@@ -87,11 +100,13 @@ class FoodDeliveryManager:
             )
             for item in cart_record.items
         ]
-        return CartResponseEntity(items=items, total_amount=cart_record.total_amount)
+        return CartResponseEntity(
+            user_id=cart_record.user_id, items=items, total_amount=cart_record.total_amount
+        )
 
     def add_to_cart(self, req: AddToCartRequestEntity) -> CartResponseEntity:
-        """Add or increment dish units in the active cart."""
-        cart_record = self.adapter.add_to_cart(req.dish_id, req.units)
+        """Add or increment dish units in the user's active cart."""
+        cart_record = self.adapter.add_to_cart(req.user_id, req.dish_id, req.units)
         items = [
             CartItemEntity(
                 dish_id=item.dish_id,
@@ -102,13 +117,15 @@ class FoodDeliveryManager:
             )
             for item in cart_record.items
         ]
-        return CartResponseEntity(items=items, total_amount=cart_record.total_amount)
+        return CartResponseEntity(
+            user_id=cart_record.user_id, items=items, total_amount=cart_record.total_amount
+        )
 
     def remove_from_cart(
-        self, dish_id: str, units: Optional[int] = None
+        self, user_id: str, dish_id: str, units: Optional[int] = None
     ) -> CartResponseEntity:
-        """Remove or decrement dish units from the active cart."""
-        cart_record = self.adapter.remove_from_cart(dish_id, units)
+        """Remove or decrement dish units from the user's active cart."""
+        cart_record = self.adapter.remove_from_cart(user_id, dish_id, units)
         items = [
             CartItemEntity(
                 dish_id=item.dish_id,
@@ -119,32 +136,35 @@ class FoodDeliveryManager:
             )
             for item in cart_record.items
         ]
-        return CartResponseEntity(items=items, total_amount=cart_record.total_amount)
+        return CartResponseEntity(
+            user_id=cart_record.user_id, items=items, total_amount=cart_record.total_amount
+        )
 
-    def clear_cart(self) -> CartResponseEntity:
-        """Empty the active cart."""
-        cart_record = self.adapter.clear_cart()
-        return CartResponseEntity(items=[], total_amount=cart_record.total_amount)
+    def clear_cart(self, user_id: str) -> CartResponseEntity:
+        """Empty the user's active cart."""
+        cart_record = self.adapter.clear_cart(user_id)
+        return CartResponseEntity(
+            user_id=cart_record.user_id, items=[], total_amount=cart_record.total_amount
+        )
 
     def place_order(
         self, req: PlaceOrderRequestEntity
     ) -> Tuple[OrderResponseEntity, bool]:
-        """Place an order from the active cart using an idempotency key.
+        """Place an order from the user's active cart using an idempotency key.
 
         Returns (OrderResponseEntity, is_replay).
         """
-        # Determine deterministic payload hash based on active cart content
-        cart_record = self.adapter.get_cart()
+        cart_record = self.adapter.get_cart(req.user_id)
 
-        # If cart is empty and this is not a known idempotency key, will fail in adapter
-        # But if it is an existing idempotency key, we want to check the key first
+        # Check existing idempotency record first
         existing_record = self.adapter.get_idempotency_record(req.idempotency_key)
         if existing_record:
-            # Replay existing order
+            if existing_record.user_id != req.user_id:
+                raise IdempotencyConflictError(
+                    f"Idempotency key '{req.idempotency_key}' already used by another user."
+                )
             existing_order = self.adapter.get_order(existing_record.order_id)
             if existing_order:
-                # If there are items in the cart right now, compute hash to see if user changed cart
-                # Otherwise, if cart is empty, match original hash
                 if cart_record.items:
                     sorted_items = sorted(
                         [{"dish_id": i.dish_id, "units": i.units} for i in cart_record.items],
@@ -159,7 +179,7 @@ class FoodDeliveryManager:
                         )
                 return self._to_order_response_entity(existing_order), True
 
-        # Generate request hash from current cart
+        # Generate request hash from current user's cart
         sorted_items = sorted(
             [{"dish_id": i.dish_id, "units": i.units} for i in cart_record.items],
             key=lambda x: x["dish_id"],
@@ -170,6 +190,7 @@ class FoodDeliveryManager:
 
         order_id = f"ord_{uuid.uuid4().hex[:10]}"
         order_record, is_replay = self.adapter.atomic_place_order(
+            user_id=req.user_id,
             order_id=order_id,
             idempotency_key=req.idempotency_key,
             request_hash=request_hash,
@@ -177,9 +198,9 @@ class FoodDeliveryManager:
 
         return self._to_order_response_entity(order_record), is_replay
 
-    def list_orders(self) -> List[OrderResponseEntity]:
-        """List all orders."""
-        order_records = self.adapter.list_orders()
+    def list_orders(self, user_id: Optional[str] = None) -> List[OrderResponseEntity]:
+        """List orders, optionally filtered by user_id."""
+        order_records = self.adapter.list_orders(user_id=user_id)
         return [self._to_order_response_entity(o) for o in order_records]
 
     def get_order(self, order_id: str) -> Optional[OrderResponseEntity]:
@@ -213,6 +234,7 @@ class FoodDeliveryManager:
         ]
         return OrderResponseEntity(
             order_id=order_record.order_id,
+            user_id=order_record.user_id,
             items=items,
             order_status=OrderStatus(order_record.order_status),
             total_amount=order_record.total_amount,

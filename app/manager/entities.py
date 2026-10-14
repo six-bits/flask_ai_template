@@ -19,6 +19,15 @@ class OrderStatus(str, Enum):
 
 
 @dataclass
+class UserEntity:
+    user_id: str
+    name: str
+
+    def to_dict(self) -> Dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
 class DishEntity:
     dish_id: str
     name: str
@@ -46,11 +55,13 @@ class CartItemEntity:
 
 @dataclass
 class CartResponseEntity:
+    user_id: str
     items: List[CartItemEntity]
     total_amount: int  # in minor units (cents)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "user_id": self.user_id,
             "items": [item.to_dict() for item in self.items],
             "total_amount": self.total_amount,
         }
@@ -58,12 +69,14 @@ class CartResponseEntity:
 
 @dataclass
 class AddToCartRequestEntity:
+    user_id: str
     dish_id: str
     units: int
 
 
 @dataclass
 class PlaceOrderRequestEntity:
+    user_id: str
     idempotency_key: str
 
 
@@ -82,6 +95,7 @@ class OrderLineItemEntity:
 @dataclass
 class OrderResponseEntity:
     order_id: str
+    user_id: str
     items: List[OrderLineItemEntity]
     order_status: OrderStatus
     total_amount: int
@@ -90,6 +104,7 @@ class OrderResponseEntity:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "order_id": self.order_id,
+            "user_id": self.user_id,
             "items": [item.to_dict() for item in self.items],
             "order_status": (
                 self.order_status.value

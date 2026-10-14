@@ -1,14 +1,19 @@
 {
   "info": {
     "_postman_id": "a93e82fa-7f8d-4c3e-9081-36e2f1e63a12",
-    "name": "Food Delivery Service API",
-    "description": "Postman Collection for Food Delivery Service with Daily Portion Limits, Active Cart, Idempotent Orders, and Lifecycle Transitions.",
+    "name": "Food Delivery Service API (Per-User)",
+    "description": "Postman Collection for Food Delivery Service with Daily Portion Limits, Per-User Carts, Pre-Seeded Users & Locks, Idempotent Orders, and Lifecycle Transitions.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
     {
       "key": "baseUrl",
       "value": "http://127.0.0.1:5001",
+      "type": "string"
+    },
+    {
+      "key": "userId",
+      "value": "user_1",
       "type": "string"
     },
     {
@@ -40,6 +45,47 @@
         "description": "Check service health status."
       },
       "response": []
+    },
+    {
+      "name": "Users",
+      "item": [
+        {
+          "name": "List Pre-Seeded Users",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Returns array of users\", function () {",
+                  "    var users = pm.response.json();",
+                  "    pm.expect(users).to.be.an(\"array\");",
+                  "    pm.expect(users.length).to.be.at.least(3);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/users",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "users"
+              ]
+            },
+            "description": "Retrieve all pre-seeded user accounts."
+          },
+          "response": []
+        }
+      ]
     },
     {
       "name": "Dishes Catalog",
@@ -122,10 +168,10 @@
       ]
     },
     {
-      "name": "Active Cart",
+      "name": "Per-User Cart",
       "item": [
         {
-          "name": "Get Active Cart",
+          "name": "Get User Cart",
           "event": [
             {
               "listen": "test",
@@ -141,7 +187,12 @@
           ],
           "request": {
             "method": "GET",
-            "header": [],
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{userId}}"
+              }
+            ],
             "url": {
               "raw": "{{baseUrl}}/cart",
               "host": [
@@ -151,12 +202,12 @@
                 "cart"
               ]
             },
-            "description": "Retrieve current active cart items and total amount in cents."
+            "description": "Retrieve current active cart for the specified user."
           },
           "response": []
         },
         {
-          "name": "Add Items to Cart (Pizza)",
+          "name": "Add Items to User Cart (Pizza)",
           "event": [
             {
               "listen": "test",
@@ -173,6 +224,10 @@
           "request": {
             "method": "POST",
             "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{userId}}"
+              },
               {
                 "key": "Content-Type",
                 "value": "application/json"
@@ -192,12 +247,12 @@
                 "items"
               ]
             },
-            "description": "Add or increment dish units in the active cart."
+            "description": "Add or increment dish units in user's cart (validates against portion limit)."
           },
           "response": []
         },
         {
-          "name": "Add Items to Cart (Pasta)",
+          "name": "Add Items to User Cart (Pasta)",
           "event": [
             {
               "listen": "test",
@@ -214,6 +269,10 @@
           "request": {
             "method": "POST",
             "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{userId}}"
+              },
               {
                 "key": "Content-Type",
                 "value": "application/json"
@@ -233,7 +292,7 @@
                 "items"
               ]
             },
-            "description": "Add Pasta Carbonara to the active cart."
+            "description": "Add Pasta Carbonara to the user's cart."
           },
           "response": []
         },
@@ -254,7 +313,12 @@
           ],
           "request": {
             "method": "DELETE",
-            "header": [],
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{userId}}"
+              }
+            ],
             "url": {
               "raw": "{{baseUrl}}/cart/items/dish_1?units=1",
               "host": [
@@ -272,7 +336,7 @@
                 }
               ]
             },
-            "description": "Decrement quantity of a dish in the active cart."
+            "description": "Decrement quantity of a dish in the user's cart."
           },
           "response": []
         },
@@ -293,7 +357,12 @@
           ],
           "request": {
             "method": "DELETE",
-            "header": [],
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{userId}}"
+              }
+            ],
             "url": {
               "raw": "{{baseUrl}}/cart/items/dish_2",
               "host": [
@@ -305,12 +374,12 @@
                 "dish_2"
               ]
             },
-            "description": "Remove a line item completely from the cart."
+            "description": "Remove a line item completely from the user's cart."
           },
           "response": []
         },
         {
-          "name": "Clear Active Cart",
+          "name": "Clear User Cart",
           "event": [
             {
               "listen": "test",
@@ -326,7 +395,12 @@
           ],
           "request": {
             "method": "DELETE",
-            "header": [],
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{userId}}"
+              }
+            ],
             "url": {
               "raw": "{{baseUrl}}/cart",
               "host": [
@@ -336,7 +410,7 @@
                 "cart"
               ]
             },
-            "description": "Empty the active cart."
+            "description": "Empty the specified user's active cart."
           },
           "response": []
         }
@@ -352,7 +426,6 @@
               "listen": "prerequest",
               "script": {
                 "exec": [
-                  "// Generate unique idempotency key if empty",
                   "if (!pm.collectionVariables.get(\"idempotencyKey\")) {",
                   "    pm.collectionVariables.set(\"idempotencyKey\", \"idemp-\" + Date.now());",
                   "}"
@@ -380,6 +453,10 @@
             "method": "POST",
             "header": [
               {
+                "key": "X-User-Id",
+                "value": "{{userId}}"
+              },
+              {
                 "key": "Idempotency-Key",
                 "value": "{{idempotencyKey}}"
               },
@@ -401,7 +478,7 @@
                 "orders"
               ]
             },
-            "description": "Place an order from the active cart. Automatically empties cart on acceptance."
+            "description": "Place an order from user's active cart. Atomically reserves portions and empties only this user's cart."
           },
           "response": []
         },
@@ -424,6 +501,10 @@
             "method": "POST",
             "header": [
               {
+                "key": "X-User-Id",
+                "value": "{{userId}}"
+              },
+              {
                 "key": "Idempotency-Key",
                 "value": "{{idempotencyKey}}"
               },
@@ -445,12 +526,12 @@
                 "orders"
               ]
             },
-            "description": "Replay order placement with the identical idempotency key; returns previous order without re-decrementing inventory."
+            "description": "Replay order placement with the identical idempotency key."
           },
           "response": []
         },
         {
-          "name": "List All Placed Orders",
+          "name": "List All Orders (Filtered by User)",
           "event": [
             {
               "listen": "test",
@@ -466,7 +547,12 @@
           ],
           "request": {
             "method": "GET",
-            "header": [],
+            "header": [
+              {
+                "key": "X-User-Id",
+                "value": "{{userId}}"
+              }
+            ],
             "url": {
               "raw": "{{baseUrl}}/orders",
               "host": [
@@ -476,7 +562,7 @@
                 "orders"
               ]
             },
-            "description": "List all placed orders and their statuses."
+            "description": "List placed orders (filtered by user if X-User-Id is provided)."
           },
           "response": []
         },

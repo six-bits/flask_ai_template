@@ -6,6 +6,7 @@ ADD_CART_ITEM_SCHEMA = {
     "properties": {
         "dish_id": {"type": "string", "minLength": 1},
         "units": {"type": "integer", "minimum": 1},
+        "user_id": {"type": "string", "minLength": 1},
     },
     "required": ["dish_id", "units"],
     "additionalProperties": False,
@@ -27,6 +28,7 @@ PLACE_ORDER_SCHEMA = {
     "type": "object",
     "properties": {
         "idempotency_key": {"type": "string", "minLength": 1},
+        "user_id": {"type": "string", "minLength": 1},
     },
     "additionalProperties": False,
 }
