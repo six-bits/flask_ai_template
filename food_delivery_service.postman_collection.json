@@ -1,0 +1,703 @@
+{
+  "info": {
+    "_postman_id": "a93e82fa-7f8d-4c3e-9081-36e2f1e63a12",
+    "name": "Food Delivery Service API",
+    "description": "Postman Collection for Food Delivery Service with Daily Portion Limits, Active Cart, Idempotent Orders, and Lifecycle Transitions.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://127.0.0.1:5001",
+      "type": "string"
+    },
+    {
+      "key": "orderId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "idempotencyKey",
+      "value": "idemp-req-001",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/health",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "health"
+          ]
+        },
+        "description": "Check service health status."
+      },
+      "response": []
+    },
+    {
+      "name": "Dishes Catalog",
+      "item": [
+        {
+          "name": "List All Dishes",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Dishes list returned\", function () {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.expect(jsonData).to.be.an(\"array\");",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/dishes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "dishes"
+              ]
+            },
+            "description": "List all dishes along with total, available, reserved, and sold portion counters."
+          },
+          "response": []
+        },
+        {
+          "name": "Seed / Add Dish",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 201\", function () {",
+                  "    pm.response.to.have.status(201);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dish_id\": \"dish_custom\",\n  \"name\": \"Gourmet Burger\",\n  \"price_per_unit\": 1400,\n  \"total_portions\": 12\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/dishes",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "dishes"
+              ]
+            },
+            "description": "Seed or add a dish with daily portions to the catalog."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Active Cart",
+      "item": [
+        {
+          "name": "Get Active Cart",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/cart",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "cart"
+              ]
+            },
+            "description": "Retrieve current active cart items and total amount in cents."
+          },
+          "response": []
+        },
+        {
+          "name": "Add Items to Cart (Pizza)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dish_id\": \"dish_1\",\n  \"units\": 2\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/cart/items",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "cart",
+                "items"
+              ]
+            },
+            "description": "Add or increment dish units in the active cart."
+          },
+          "response": []
+        },
+        {
+          "name": "Add Items to Cart (Pasta)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"dish_id\": \"dish_2\",\n  \"units\": 1\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/cart/items",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "cart",
+                "items"
+              ]
+            },
+            "description": "Add Pasta Carbonara to the active cart."
+          },
+          "response": []
+        },
+        {
+          "name": "Decrement Dish Units in Cart",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/cart/items/dish_1?units=1",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "cart",
+                "items",
+                "dish_1"
+              ],
+              "query": [
+                {
+                  "key": "units",
+                  "value": "1"
+                }
+              ]
+            },
+            "description": "Decrement quantity of a dish in the active cart."
+          },
+          "response": []
+        },
+        {
+          "name": "Remove Dish Completely from Cart",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/cart/items/dish_2",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "cart",
+                "items",
+                "dish_2"
+              ]
+            },
+            "description": "Remove a line item completely from the cart."
+          },
+          "response": []
+        },
+        {
+          "name": "Clear Active Cart",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/cart",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "cart"
+              ]
+            },
+            "description": "Empty the active cart."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Orders",
+      "item": [
+        {
+          "name": "Place Order (Idempotent)",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "// Generate unique idempotency key if empty",
+                  "if (!pm.collectionVariables.get(\"idempotencyKey\")) {",
+                  "    pm.collectionVariables.set(\"idempotencyKey\", \"idemp-\" + Date.now());",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 201 Created or 200 Replay\", function () {",
+                  "    pm.expect([200, 201]).to.include(pm.response.code);",
+                  "});",
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.order_id) {",
+                  "    pm.collectionVariables.set(\"orderId\", jsonData.order_id);",
+                  "}"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotencyKey}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders"
+              ]
+            },
+            "description": "Place an order from the active cart. Automatically empties cart on acceptance."
+          },
+          "response": []
+        },
+        {
+          "name": "Replay Order Placement (Idempotent Replay)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200 OK for replay\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Idempotency-Key",
+                "value": "{{idempotencyKey}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders"
+              ]
+            },
+            "description": "Replay order placement with the identical idempotency key; returns previous order without re-decrementing inventory."
+          },
+          "response": []
+        },
+        {
+          "name": "List All Placed Orders",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/orders",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders"
+              ]
+            },
+            "description": "List all placed orders and their statuses."
+          },
+          "response": []
+        },
+        {
+          "name": "Get Specific Order by ID",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/orders/{{orderId}}",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders",
+                "{{orderId}}"
+              ]
+            },
+            "description": "Retrieve specific order details by ID."
+          },
+          "response": []
+        }
+      ]
+    },
+    {
+      "name": "Order Lifecycle Transitions",
+      "item": [
+        {
+          "name": "Transition to ORDER_PREPARING",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Status is ORDER_PREPARING\", function () {",
+                  "    pm.expect(pm.response.json().order_status).to.eql(\"ORDER_PREPARING\");",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"ORDER_PREPARING\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/orders/{{orderId}}/transitions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders",
+                "{{orderId}}",
+                "transitions"
+              ]
+            },
+            "description": "Advance order status from ORDER_ACCEPTED to ORDER_PREPARING."
+          },
+          "response": []
+        },
+        {
+          "name": "Transition to ORDER_DELIVERING",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Status is ORDER_DELIVERING\", function () {",
+                  "    pm.expect(pm.response.json().order_status).to.eql(\"ORDER_DELIVERING\");",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"ORDER_DELIVERING\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/orders/{{orderId}}/transitions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders",
+                "{{orderId}}",
+                "transitions"
+              ]
+            },
+            "description": "Advance order status from ORDER_PREPARING to ORDER_DELIVERING."
+          },
+          "response": []
+        },
+        {
+          "name": "Transition to ORDER_COMPLETED (Terminal)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Status is ORDER_COMPLETED\", function () {",
+                  "    pm.expect(pm.response.json().order_status).to.eql(\"ORDER_COMPLETED\");",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"ORDER_COMPLETED\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/orders/{{orderId}}/transitions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders",
+                "{{orderId}}",
+                "transitions"
+              ]
+            },
+            "description": "Advance order status to ORDER_COMPLETED. Converts reserved portions to sold portions."
+          },
+          "response": []
+        },
+        {
+          "name": "Transition to ORDER_CANCELLED (Terminal)",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "pm.test(\"Status code is 200\", function () {",
+                  "    pm.response.to.have.status(200);",
+                  "});",
+                  "pm.test(\"Status is ORDER_CANCELLED\", function () {",
+                  "    pm.expect(pm.response.json().order_status).to.eql(\"ORDER_CANCELLED\");",
+                  "});"
+                ],
+                "type": "text/javascript"
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"ORDER_CANCELLED\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/orders/{{orderId}}/transitions",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "orders",
+                "{{orderId}}",
+                "transitions"
+              ]
+            },
+            "description": "Cancel order from ORDER_ACCEPTED or ORDER_PREPARING. Returns reserved portions to available portions."
+          },
+          "response": []
+        }
+      ]
+    }
+  ]
+}
